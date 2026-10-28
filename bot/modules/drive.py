@@ -79,7 +79,7 @@ def load_credentials(token_path, token_b64=''):
         raise DriveTransferError('Cannot load the Drive token. Use a trusted token.pickle containing google.oauth2.credentials.Credentials with Drive upload access.') from None
 
 
-async def download_file(url, directory, max_bytes):
+async def download_file(url, directory, max_bytes, progress=None):
     if max_bytes <= 0:
         raise DriveTransferError('DRIVE_MAX_MB must be positive.')
     timeout = aiohttp.ClientTimeout(total=3600, sock_connect=30, sock_read=60)
@@ -115,6 +115,8 @@ async def download_file(url, directory, max_bytes):
                 name = re.sub(r'[\\/\x00-\x1f\x7f]', '_', name).strip(' .')[:180] or 'download.bin'
                 path = Path(directory) / 'payload'  # Remote names never become local paths.
                 written = 0
+                if progress:
+                    progress(0, size)
                 async with aiofiles.open(path, 'wb') as output:
                     async for chunk in response.content.iter_chunked(1024 * 1024):
                         written += len(chunk)
@@ -123,13 +125,15 @@ async def download_file(url, directory, max_bytes):
                         if len(chunk) + reserve > shutil.disk_usage(directory).free:
                             raise DriveTransferError('Temporary disk space is low; the download was stopped.')
                         await output.write(chunk)
+                        if progress:
+                            progress(written, size)
                 if size is not None and written != size:
                     raise DriveTransferError('The download was incomplete. Retry with a working direct link.')
                 return path, name
         raise DriveTransferError('The download URL redirected too many times.')
 
 
-def upload_file(path, name, credentials, folder_id=''):
+def upload_file(path, name, credentials, folder_id='', progress=None):
     metadata = {'name': name}
     if folder_id:
         metadata['parents'] = [folder_id]
@@ -141,9 +145,13 @@ def upload_file(path, name, credentials, folder_id=''):
                 fields='id,name,size,webViewLink', supportsAllDrives=True)
             result = None
             while result is None:
-                _, result = request.next_chunk(num_retries=3)
+                status, result = request.next_chunk(num_retries=3)
+                if progress and status is not None:
+                    progress(status.resumable_progress, path.stat().st_size)
         if int(result.get('size', -1)) != path.stat().st_size:
             raise DriveTransferError('Drive returned an unexpected file size. Check your Drive before retrying to avoid a duplicate.')
+        if progress:
+            progress(path.stat().st_size, path.stat().st_size)
         return result
     except RefreshError:
         raise DriveTransferError('Google authorization expired or was revoked. Regenerate your Drive token.') from None
