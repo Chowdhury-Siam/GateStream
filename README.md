@@ -28,7 +28,9 @@ Extract the ZIP and upload the **contents** of its project folder, so `README.md
 ## What you can do
 
 - **Index your channels.** Add one file with `/link`, or an episode range with `/batch`.
+- **Browse the protected index.** Open `/index` to search indexed files and batch episodes, then watch or download. Initial password: `Siam`. The owner changes it with `/setpassword <new password>`.
 - **Find your media.** Search movies, anime, series, and direct files from Telegram.
+- **Follow transfers live.** The home page shows active links, HTTP connections, Drive downloads/uploads, byte counts, progress, speed, elapsed time and ETA.
 - **Watch your way.** Play in the browser, resume playback, or open VLC or MX Player.
 - **Share a link.** Create stream, download, and API URLs; revoke access by removing a link.
 - **Manage the library.** Inspect server stats, backfill durations, and back up or restore records.
@@ -119,6 +121,8 @@ Cloudflare guide for all settings and the deployment steps.
 | `/batch anime <start_link> <end_link>` | Index anime episodes |
 | `/batch series <start_link> <end_link>` | Index series episodes |
 | `/episodes <batch_code>` | List a batch's episodes |
+| `/index` | Open the password-protected media index |
+| `/setpassword <new password>` | Owner only: change the shared index password and invalidate existing sessions |
 | `/privacy` | Explain stored data and link access |
 | `/drive <url>` | Admin-only: download a direct file URL and upload it to Google Drive when enabled |
 
@@ -151,12 +155,14 @@ See [GOOGLE_DRIVE.md](GOOGLE_DRIVE.md) for token setup, limits and hosting requi
 | Endpoint | Response |
 | --- | --- |
 | `/` | GateStream landing page |
+| `/api/activity` | Live aggregate transfer counters and anonymous progress rows |
 | `/health`, `/ping` | `OK` when the web server is responding |
 | `/stream/<code>` | Browser player |
 | `/dl/<code>` | Download; add `?stream=1` for inline media |
 | `/api/file/<code>` | File details and links |
 | `/api/batch/<code>` | Batch details and episode links |
-| `/api/movies` | Movie catalog response |
+| `/index` | Password-protected searchable file catalog with pagination and download buttons |
+| `/api/movies` | Movie catalog response; requires an index login cookie |
 
 Anyone holding a valid media URL can access it. Telegram user restrictions
 apply to bot commands, not HTTP playback. Index and share media you have
@@ -171,6 +177,65 @@ docker run -d --name gatestream -p 8080:7860 --env-file .env -e PORT=7860 --rest
 
 Set `BASE_URL` for the public address mapped to this container. For Spaces, use `GateStream-HuggingFace.zip`; its README includes the Docker
 SDK metadata and port `7860` configuration.
+
+## Password-protected media index
+
+Open `/index` on your server or Worker, or send `/index` to the Telegram bot.
+The initial password is **`Siam`** (case-sensitive). The page lists individual
+files and episodes inside indexed anime/series batches, with filename/batch-title
+search, category filters, watch/download buttons, and 30 files per page.
+
+The account whose Telegram ID matches `OWNER_ID` can change the password in a
+private bot chat:
+
+```text
+/setpassword Your new password
+```
+
+`/indexpassword` is an alias. Passwords can contain spaces and must be 1–256
+characters. Other administrators cannot change it. The bot confirms the change
+without repeating the password and attempts to delete the command message.
+
+A salted scrypt hash and signing secret are stored in the MongoDB `settings`
+collection, under `index_access`. This persists across host restarts while using
+the same database. The password is not stored in plaintext. Signed login cookies
+last eight hours, use HttpOnly/SameSite protections, and are Secure on HTTPS.
+Every password change rotates the signing secret and signs out old sessions.
+Login/logout forms have CSRF protection, and repeated login attempts are limited.
+The index is private and uncached; it does not appear in the activity API.
+
+The bulk `/api/movies` endpoint now requires the same index login cookie, closing
+the previous unauthenticated catalog listing. Existing per-file and batch API
+links, stream links, and direct download links keep their sharing behavior:
+this password protects catalog discovery, not media links already shared with
+someone. Visitors do not need a Telegram account to enter the shared password.
+
+The existing `/backup` command exports media collections, not index access
+settings. When migrating using only that media backup, set the index password
+again on the destination; moving the full database preserves it.
+
+## Live activity dashboard
+
+Open the server or Worker home page to follow transfers live. The dashboard
+refreshes every two seconds while visible and slows polling in background tabs.
+Media links are counted separately from HTTP range connections. It shows Drive
+downloading/uploading counts, downloaded and uploaded bytes, data sent to viewers,
+completed requests, failures, incomplete transfers and server uptime.
+
+Active rows show progress, transferred/total bytes, average speed, elapsed time
+and ETA. Unknown-size downloads use an indeterminate progress bar. Summary
+throughput covers roughly five seconds. Only the latest 20 active rows are shown;
+all active transfers are included in the counters. On a network failure the
+previous values stay dimmed and the panel shows disconnected until it reconnects.
+
+The public endpoint exposes aggregate counts and anonymous activity numbers,
+without file names, URLs, file codes, Drive IDs, credentials or user IDs.
+Counters are held in memory in one server process and reset when it restarts.
+These are not persistent or multi-replica analytics. Media byte totals measure
+bytes handed to HTTP responses, not proof a client saved a whole file. Drive
+upload bytes are acknowledged chunks; successful uploads are size-verified.
+Failed/incomplete transfers retain their partial byte totals. The existing
+one-at-a-time Drive limit still applies; no transfer queue has been added.
 
 ## Upgrading an existing deployment
 
