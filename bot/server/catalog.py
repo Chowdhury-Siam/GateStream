@@ -1,13 +1,14 @@
 import hmac
 import logging
+import re
 import secrets
 import time
 from collections import deque
 
-from quart import Blueprint, make_response, redirect, render_template, request, url_for
+from quart import Blueprint, Response, make_response, redirect, render_template, request, stream_with_context, url_for
 
 from bot.config import Server
-from bot.database.catalog import CATEGORIES, PAGE_SIZE, list_files
+from bot.database.catalog import CATEGORIES, PAGE_SIZE, list_files, selected_files
 from bot.modules import index_access
 from bot.modules.static import get_human_size
 
@@ -58,14 +59,16 @@ async def authenticated():
 
 async def _login(error=None, status=200):
     csrf = _csrf_token()
-    response = await make_response(await render_template('catalog.html', unlocked=False, csrf=csrf, error=error), status)
+    response = await make_response(await render_template('catalog.html', unlocked=False, section='link', signed_in=False, csrf=csrf, error=error), status)
     _csrf_cookie(response, csrf)
     return _private(response)
 
 
 @bp.route('/index')
 async def index_page():
-    if not await authenticated():
+    section = 'link' if request.args.get('section') == 'link' else 'index'
+    signed_in = await authenticated() if section == 'link' else False
+    if section == 'link' and not signed_in:
         return await _login()
     query = request.args.get('q', '').strip()[:100]
     category = request.args.get('category', 'all')
@@ -76,19 +79,19 @@ async def index_page():
     except ValueError:
         page = 1
     try:
-        data = await list_files(page, query, category)
+        data = await list_files(page, query, category, section)
     except Exception as error:
         logger.error('Index listing unavailable (%s).', type(error).__name__)
         return _private(await make_response('The media index is temporarily unavailable. Please try again.', 503))
     if page > data['pages']:
-        return _private(redirect(url_for('catalog.index_page', q=query, category=category, page=data['pages'])))
+        return _private(redirect(url_for('catalog.index_page', q=query, category=category, section=section, page=data['pages'])))
     for item in data['files']:
         try:
             item['file_size'] = max(0, int(item.get('file_size') or 0))
         except (ValueError, TypeError):
             item['file_size'] = 0
     csrf = _csrf_token()
-    response = await make_response(await render_template('catalog.html', unlocked=True, csrf=csrf,
+    response = await make_response(await render_template('catalog.html', unlocked=True, section=section, signed_in=signed_in, csrf=csrf,
         query=query, category=category, categories=CATEGORIES, page_size=PAGE_SIZE, get_human_size=get_human_size, **data))
     _csrf_cookie(response, csrf)
     return _private(response)
@@ -123,7 +126,7 @@ async def index_login():
     if not valid:
         return await _login('Incorrect password. Please try again.', 401)
     attempts.clear()
-    response = redirect(url_for('catalog.index_page'))
+    response = redirect(url_for('catalog.index_page', section='link'))
     response.set_cookie(index_access.COOKIE, index_access.session_token(document),
         max_age=index_access.SESSION_AGE, httponly=True, secure=_secure(), samesite='Lax', path='/')
     return _private(response)
@@ -134,6 +137,49 @@ async def index_logout():
     request.max_content_length = 4096
     if not _csrf_valid(await request.form):
         return await _login('The sign-out form expired. Please try again.', 400)
-    response = redirect(url_for('catalog.index_page'))
+    response = redirect(url_for('catalog.index_page', section='link'))
     response.delete_cookie(index_access.COOKIE, path='/')
+    return _private(response)
+
+
+@bp.route('/index/download', methods=['POST'])
+async def download_selected():
+    request.max_content_length = 16384
+    form = await request.form
+    if not _csrf_valid(form):
+        return _private(await make_response('The selection form expired. Reload the catalog and try again.', 400))
+    section = form.get('section', '')
+    if section not in ('index', 'link'):
+        return _private(await make_response('Invalid catalog section.', 400))
+    if section == 'link' and not await authenticated():
+        return await _login('Enter the password before downloading selected Link files.', 401)
+    codes = list(dict.fromkeys(form.getlist('code')))
+    if not 1 <= len(codes) <= PAGE_SIZE or any(not re.fullmatch(r'[A-Za-z0-9_-]{1,128}', code) for code in codes):
+        return _private(await make_response(f'Select between 1 and {PAGE_SIZE} files on this page.', 400))
+    if request.headers.get('Range'):
+        return _private(await make_response('ZIP downloads cannot be resumed. Start a new download.', 400))
+    try:
+        files = await selected_files(codes, section)
+    except Exception as error:
+        logger.error('Selection lookup unavailable (%s).', type(error).__name__)
+        return _private(await make_response('The catalog is temporarily unavailable. Please try again.', 503))
+    if len(files) != len(codes):
+        return _private(await make_response('Some selected files are no longer in this category. Reload and select again.', 409))
+    from bot.modules.archive import stream_archive
+    from .main import transmit_file
+
+    @stream_with_context
+    async def archive():
+        try:
+            async for chunk in stream_archive(files, transmit_file):
+                yield chunk
+        except Exception as error:
+            logger.error('ZIP transfer interrupted (%s).', type(error).__name__)
+            raise
+
+    response = Response(archive(), content_type='application/zip', headers={
+        'Content-Disposition': f'attachment; filename="GateStream-{section}.zip"',
+        'X-Content-Type-Options': 'nosniff',
+    })
+    response.timeout = None
     return _private(response)
