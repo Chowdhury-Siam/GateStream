@@ -65,6 +65,7 @@ async def save_file(
         'duration_formatted': duration_formatted,
         'user_id': user_id,
         'category': category.lower(),
+        'catalog_section': 'link',
         'title': title or file_name,
         'created_at': datetime.utcnow()
     }
@@ -110,6 +111,7 @@ async def save_batch(
         'batch_code': batch_code,
         'title': title or f"{category.upper()} Batch ({len(episodes)} episodes)",
         'category': category.lower(),
+        'catalog_section': 'index',
         'channel_id': channel_id,
         'start_id': start_id,
         'end_id': end_id,
