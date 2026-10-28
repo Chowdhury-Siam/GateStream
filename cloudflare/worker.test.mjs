@@ -65,3 +65,24 @@ test('preserves origin errors and redirects; reports network failures as 502', a
   t.mock.method(globalThis, 'fetch', async () => { throw new Error('Network failure'); });
   assert.equal((await worker.fetch(new Request('https://proxy.example/health'), env)).status, 502);
 });
+
+test('forwards catalog POST forms, cookies and body without buffering ZIP responses', async (t) => {
+  for (const path of ['/index/login', '/index/logout', '/index/download']) {
+    const upstream = new Response('zip-or-login', { headers: { 'Set-Cookie': 'gatestream_index=session; HttpOnly', 'Cache-Control': 'private, no-store' } });
+    t.mock.method(globalThis, 'fetch', async (url, options) => {
+      assert.equal(url, 'https://origin.example' + path);
+      assert.equal(options.method, 'POST');
+      assert.equal(options.headers.get('Cookie'), 'gatestream_index_csrf=token');
+      assert.equal(await new Response(options.body).text(), 'csrf=token&code=episode1');
+      return upstream;
+    });
+    const response = await worker.fetch(new Request('https://proxy.example' + path, {
+      method: 'POST', headers: { Cookie: 'gatestream_index_csrf=token', 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: 'csrf=token&code=episode1',
+    }), env);
+    assert.equal(response, upstream);
+    assert.match(response.headers.get('Set-Cookie'), /HttpOnly/);
+    t.mock.restoreAll();
+  }
+  assert.equal((await worker.fetch(new Request('https://proxy.example/dl/code', { method: 'POST' }), env)).status, 405);
+});
