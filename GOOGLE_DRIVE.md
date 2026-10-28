@@ -135,3 +135,11 @@ file cleanup. No live Google Drive upload is performed by the tests.
 
 Google upload reference:
 https://developers.google.com/workspace/drive/api/guides/manage-uploads
+
+## Live progress on the home page
+
+Open the GateStream home page during a transfer to see stage counts, byte totals,
+percentage, average speed, elapsed time and ETA. Unknown download sizes show an
+indeterminate bar. Drive uploads update when a resumable chunk is acknowledged,
+so progress can advance in steps. These anonymous statistics are public and reset
+when the server restarts.
