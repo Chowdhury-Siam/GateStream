@@ -70,7 +70,7 @@ class IndexRouteTests(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(self.settings_patch.stop)
 
     async def csrf(self):
-        response = await self.client.get('/index', scheme='https')
+        response = await self.client.get('/index?section=link', scheme='https')
         body = await response.get_data(as_text=True)
         return re.search(r'name="csrf" value="([^"]+)"', body).group(1)
 
@@ -80,14 +80,81 @@ class IndexRouteTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_unauthenticated_page_never_queries_or_exposes_files(self):
         with patch.object(catalog, 'list_files', AsyncMock()) as listing:
-            response = await self.client.get('/index', scheme='https')
+            response = await self.client.get('/index?section=link', scheme='https')
             listing.assert_not_awaited()
         body = await response.get_data(as_text=True)
-        self.assertIn('Unlock the index', body)
+        self.assertIn('Unlock Link', body)
         self.assertNotIn('Siam', body)
         self.assertIn('no-store', response.headers['Cache-Control'])
         api = await self.client.get('/api/movies', scheme='https')
         self.assertEqual(api.status_code, 401)
+
+    async def test_public_index_does_not_need_password_or_settings(self):
+        data = dict(files=[], total=0, page=1, pages=1)
+        with patch.object(catalog, 'list_files', AsyncMock(return_value=data)) as listing:
+            response = await self.client.get('/index', scheme='https')
+            listing.assert_awaited_once_with(1, '', 'all', 'index')
+        self.settings.assert_not_awaited()
+        self.assertEqual(response.status_code, 200)
+        body = await response.get_data(as_text=True)
+        self.assertIn('The public index.', body)
+        self.assertNotIn('type="password"', body)
+        self.assertIn('section=link', body)
+
+    async def test_bulk_download_access_validation_and_zip_contents(self):
+        import io
+        from zipfile import ZipFile
+        from quart import Response
+        from werkzeug.datastructures import MultiDict
+        from bot.server import main
+        from urllib.parse import urlencode
+        data = dict(files=[], total=0, page=1, pages=1)
+        with patch.object(catalog, 'list_files', AsyncMock(return_value=data)):
+            response = await self.client.get('/index', scheme='https')
+        csrf = re.search(r'name="csrf" value="([^"]+)"', await response.get_data(as_text=True)).group(1)
+        form = MultiDict([('csrf', csrf), ('section', 'index'), ('code', 'episode1'), ('code', 'episode2')])
+        async def post():
+            return await self.client.post('/index/download', data=urlencode(list(form.items(multi=True))),
+                headers={'Content-Type': 'application/x-www-form-urlencoded'}, scheme='https')
+        files = [dict(code='episode1', file_name='../same.mp4'), dict(code='episode2', file_name='../same.mp4')]
+
+        async def download(code):
+            async def body():
+                yield b'ab'
+                yield b'cd'
+            return Response(body(), headers={'Content-Length': '4'})
+
+        with patch.object(catalog, 'selected_files', AsyncMock(return_value=files)) as selected:
+            with patch.object(main, 'transmit_file', download):
+                response = await post()
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(response.content_type, 'application/zip')
+                selected.assert_awaited_once_with(['episode1', 'episode2'], 'index')
+                with ZipFile(io.BytesIO(await response.get_data())) as archive:
+                    self.assertEqual(archive.namelist(), ['01-.._same.mp4', '02-.._same.mp4'])
+                    self.assertEqual([archive.read(name) for name in archive.namelist()], [b'abcd', b'abcd'])
+            form['section'] = 'link'
+            selected.reset_mock()
+            self.assertEqual((await post()).status_code, 401)
+            selected.assert_not_awaited()
+            form['section'] = 'index'
+            selected.return_value = []  # A private code cannot be smuggled into public selection.
+            self.assertEqual((await post()).status_code, 409)
+            form.setlist('code', ['x'] * 31 + [str(i) for i in range(31)])
+            self.assertEqual((await post()).status_code, 400)
+            form.setlist('code', ['../../bad'])
+            self.assertEqual((await post()).status_code, 400)
+            form.setlist('code', ['episode1'])
+            form['csrf'] = 'wrong'
+            self.assertEqual((await post()).status_code, 400)
+        await self.login()
+        form['csrf'] = await self.csrf()
+        form['section'] = 'link'
+        with patch.object(catalog, 'selected_files', AsyncMock(return_value=[files[0]])), patch.object(main, 'transmit_file', download):
+            response = await post()
+            self.assertEqual(response.status_code, 200)
+            with ZipFile(io.BytesIO(await response.get_data())) as archive:
+                self.assertEqual(archive.read(archive.namelist()[0]), b'abcd')
 
     async def test_login_cookie_catalog_render_filters_and_logout(self):
         response = await self.login()
@@ -99,8 +166,8 @@ class IndexRouteTests(unittest.IsolatedAsyncioTestCase):
             file_size=1024, category='anime', duration_formatted='01:00', batch_title='Season 1')],
             total=61, page=2, pages=3)
         with patch.object(catalog, 'list_files', AsyncMock(return_value=data)) as listing:
-            response = await self.client.get('/index?q=title&category=anime&page=2', scheme='https')
-            listing.assert_awaited_once_with(2, 'title', 'anime')
+            response = await self.client.get('/index?section=link&q=title&category=anime&page=2', scheme='https')
+            listing.assert_awaited_once_with(2, 'title', 'anime', 'link')
         body = await response.get_data(as_text=True)
         self.assertIn('/dl/test-code', body)
         self.assertIn('Download', body)
@@ -111,8 +178,8 @@ class IndexRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('page=3', body)
         csrf = re.search(r'name="csrf" value="([^"]+)"', body).group(1)
         self.assertEqual((await self.client.post('/index/logout', form={'csrf': csrf}, scheme='https')).status_code, 302)
-        body = await (await self.client.get('/index', scheme='https')).get_data(as_text=True)
-        self.assertIn('Unlock the index', body)
+        body = await (await self.client.get('/index?section=link', scheme='https')).get_data(as_text=True)
+        self.assertIn('Unlock Link', body)
 
     async def test_wrong_password_csrf_failures_and_database_failure_are_closed(self):
         self.assertEqual((await self.login('wrong')).status_code, 401)
@@ -137,9 +204,9 @@ class IndexRouteTests(unittest.IsolatedAsyncioTestCase):
         await self.login()
         self.settings.return_value = index_access._record('Another password')
         with patch.object(catalog, 'list_files', AsyncMock()) as listing:
-            response = await self.client.get('/index', scheme='https')
+            response = await self.client.get('/index?section=link', scheme='https')
             listing.assert_not_awaited()
-        self.assertIn('Unlock the index', await response.get_data(as_text=True))
+        self.assertIn('Unlock Link', await response.get_data(as_text=True))
 
 
 class OwnerPasswordTests(unittest.IsolatedAsyncioTestCase):
