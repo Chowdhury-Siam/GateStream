@@ -12,7 +12,7 @@ logger = logging.getLogger('bot')
 @TelegramBot.on_message(filters.command('index') & filters.private)
 @verify_user
 async def index_link_command(_, message):
-    await message.reply('Open the media index and enter the library password to browse files.', quote=True,
+    await message.reply('Browse Index files freely. Open the Link tab and enter the password to browse single-file links.', quote=True,
         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton('Open media index', url=f'{Server.BASE_URL}/index')]]))
 
 
@@ -20,16 +20,16 @@ async def index_link_command(_, message):
 @verify_user
 async def index_password_command(_, message):
     if not message.from_user or message.from_user.id != Telegram.OWNER_ID:
-        return await message.reply('Only the bot owner can change the index password.', quote=True)
+        return await message.reply('Only the bot owner can change the Link password.', quote=True)
     parts = (message.text or message.caption or '').split(maxsplit=1)
     if len(parts) != 2 or not 1 <= len(parts[1].strip()) <= 256:
         return await message.reply('Usage: /setpassword <new password>\nUse 1–256 characters. Spaces are allowed.', quote=True)
     try:
         await set_password(parts[1].strip())
     except Exception as error:
-        logger.error('Index password update failed (%s).', type(error).__name__)
+        logger.error('Link password update failed (%s).', type(error).__name__)
         return await message.reply('The password could not be saved. Please check the database and try again.', quote=False)
-    await message.reply('Index password updated. Existing index sessions have been signed out.', quote=False)
+    await message.reply('Link password updated. Existing Link sessions have been signed out.', quote=False)
     try:
         await message.delete()
     except Exception:
