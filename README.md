@@ -56,7 +56,7 @@ Use Python 3.11 or newer, a MongoDB endpoint reachable from the host, and a
 Telegram bot created through BotFather. Give the bot access to your source channels.
 
 ```bash
-git clone https://github.com/Chowdhury-Siam/FTL.git GateStream
+git clone https://github.com/Chowdhury-Siam/GateStream.git GateStream
 cd GateStream
 python -m venv .venv
 source .venv/bin/activate
@@ -72,7 +72,7 @@ address, then start the bot:
 python -m bot
 ```
 
-The repository may retain its existing `FTL` name on GitHub; the product is GateStream.
+Project repository: [Chowdhury-Siam/GateStream](https://github.com/Chowdhury-Siam/GateStream).
 Run only one deployment per main Telegram bot token.
 
 ## Configuration
@@ -198,7 +198,10 @@ records, so these compatibility identifiers remain intentionally.
 The existing deployment target remains `ftl-stream-proxy` so the workflow can
 update your deployed Worker. To create a separately named Worker, set
 `CLOUDFLARE_WORKER_NAME=gatestream-proxy` and update the bot's `BASE_URL` after
-deployment; this is optional.
+deployment; this is optional. You can also enter a Worker name directly under
+**GitHub Actions → Deploy GateStream Worker → Run workflow**. The form overrides
+the repository variable for that run only; save the repository variable to use
+the same name for automatic deployments.
 
 ## Checks
 
