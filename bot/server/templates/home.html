@@ -43,6 +43,40 @@
       article + article { border-top: 1px solid #333129; } article p { max-width: none; }
       footer { align-items: flex-start; }
     }
+
+    .hero { padding: 52px 0 40px; }
+    h1 { font-size: clamp(42px, 6vw, 64px); letter-spacing: -3px; }
+    .features { margin-top: 36px; }
+    .panel-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
+    .panel-heading h2 { font-size: 21px; margin: 0; letter-spacing: -.5px; }
+    .activity-status { color: #aaa89f; font-size: 11px; }
+    .activity-status[data-live="true"] { color: #c2d7b3; }
+    .metric-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+    .metric-card { padding: 18px; border: 1px solid #333129; border-radius: 10px; background: #171611; min-width: 0; }
+    .metric-label { display: block; color: #aaa89f; font-size: 11px; letter-spacing: .5px; }
+    .metric-value { display: block; color: #f4f0e7; font-size: 29px; line-height: 1.3; font-weight: 600; margin: 8px 0 5px; font-variant-numeric: tabular-nums; }
+    .metric-note { display: block; font-size: 11px; color: #d6ad60; }
+    .activity-panel[data-stale="true"] .metric-value { opacity: .5; }
+    .activity-summary { display: flex; flex-wrap: wrap; gap: 8px 22px; margin: 16px 0 22px; color: #aaa89f; font-size: 11px; }
+    .activity-summary strong { color: #f4f0e7; font-weight: 500; }
+    .transfer-list { display: grid; gap: 10px; }
+    .transfer-row { border: 1px solid #333129; border-radius: 10px; background: #14130f; padding: 16px 18px; }
+    .transfer-heading { display: flex; justify-content: space-between; gap: 12px; font-size: 13px; }
+    .transfer-heading strong { font-weight: 550; }
+    .transfer-heading span { color: #d6ad60; white-space: nowrap; }
+    progress { display: block; width: 100%; height: 5px; margin: 12px 0; accent-color: #d6ad60; }
+    .transfer-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+    .transfer-stats span { display: block; color: #aaa89f; font-size: 10px; }
+    .transfer-stats strong { display: block; font-size: 12px; font-weight: 500; font-variant-numeric: tabular-nums; margin-top: 3px; overflow-wrap: anywhere; }
+    .empty-state { padding: 20px; border: 1px dashed #39362c; border-radius: 10px; color: #aaa89f; font-size: 13px; }
+    .activity-footnote { color: #918e83; font-size: 10px; margin: 12px 0 0; }
+    @media (max-width: 600px) {
+      .hero { padding: 40px 0 32px; } h1 { letter-spacing: -2px; }
+      .metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+      .metric-card { padding: 14px; } .metric-value { font-size: 25px; }
+      .panel-heading h2 { font-size: 19px; } .transfer-row { padding: 14px; }
+      .transfer-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
   </style>
 </head>
 <body>
@@ -62,7 +96,29 @@
         <p class="secondary">Open your Telegram bot to get started.</p>
         {% endif %}
         <a class="secondary" href="/health">Check server health</a>
+        <a class="secondary" href="/index" target="_blank" rel="noopener noreferrer">Browse indexed files ↗</a>
       </div>
+    </section>
+    <section class="activity-panel" id="activity-panel" aria-labelledby="activity-title" data-stale="true">
+      <div class="panel-heading"><h2 id="activity-title">Live transfer activity</h2><span class="activity-status" id="activity-status" role="status">Connecting…</span></div>
+      <div class="metric-grid">
+        <article class="metric-card"><span class="metric-label">MEDIA LINKS ACTIVE</span><strong class="metric-value" id="media-active">—</strong><span class="metric-note" id="media-connections">Waiting for activity data</span></article>
+        <article class="metric-card"><span class="metric-label">DRIVE DOWNLOADING</span><strong class="metric-value" id="download-active">—</strong><span class="metric-note" id="download-completed">— files downloaded</span></article>
+        <article class="metric-card"><span class="metric-label">DRIVE UPLOADING</span><strong class="metric-value" id="upload-active">—</strong><span class="metric-note" id="upload-completed">— files uploaded</span></article>
+        <article class="metric-card"><span class="metric-label">DOWNLOADED TO SERVER</span><strong class="metric-value" id="download-bytes">—</strong><span class="metric-note" id="download-speed">— /s recent throughput</span></article>
+        <article class="metric-card"><span class="metric-label">UPLOADED TO DRIVE</span><strong class="metric-value" id="upload-bytes">—</strong><span class="metric-note" id="upload-speed">— /s recent throughput</span></article>
+        <article class="metric-card"><span class="metric-label">SENT TO VIEWERS</span><strong class="metric-value" id="media-bytes">—</strong><span class="metric-note" id="media-speed">— /s recent throughput</span></article>
+      </div>
+      <div class="activity-summary">
+        <span>Completed media requests: <strong id="media-completed">—</strong></span>
+        <span>Failed transfers: <strong id="transfer-failed">—</strong></span>
+        <span>Incomplete: <strong id="transfer-incomplete">—</strong></span>
+        <span>Uptime: <strong id="server-uptime">—</strong></span>
+      </div>
+      <div class="transfer-list" id="transfer-list"><div class="empty-state">Loading current transfers…</div></div>
+      <p class="activity-footnote">Live updates every 2 seconds. Totals are since this server restarted. One media link may have multiple HTTP connections.</p>
+      <p class="activity-footnote" id="activity-updated">Private file names and URLs are not shown.</p>
+      <noscript><p class="activity-footnote">Enable JavaScript to view live transfer statistics.</p></noscript>
     </section>
     <section class="features" aria-label="What GateStream does">
       <article><span class="number">01 / INDEX</span><h2>Keep your library together.</h2><p>Index individual files or entire episode batches from your Telegram channels.</p></article>
@@ -71,5 +127,85 @@
     </section>
     <footer><span>GateStream</span><span>Built for your personal media library.</span></footer>
   </main>
+  <script>
+    (() => {
+      const byId = id => document.getElementById(id);
+      const text = (id, value) => { byId(id).textContent = value; };
+      const bytes = value => {
+        let size = Math.max(0, Number(value) || 0), unit = 0;
+        const units = ['B', 'KiB', 'MiB', 'GiB', 'TiB'];
+        while (size >= 1024 && unit < units.length - 1) { size /= 1024; unit++; }
+        return `${size.toFixed(unit ? 1 : 0)} ${units[unit]}`;
+      };
+      const duration = value => {
+        if (value === null || value === undefined || !Number.isFinite(Number(value))) return '—';
+        let seconds = Math.max(0, Math.ceil(Number(value)));
+        const hours = Math.floor(seconds / 3600), minutes = Math.floor(seconds % 3600 / 60);
+        seconds %= 60;
+        return hours ? `${hours}h ${minutes}m` : minutes ? `${minutes}m ${seconds}s` : `${seconds}s`;
+      };
+      const labels = { media: 'Media download', download: 'Drive download', upload: 'Drive upload' };
+      function render(data) {
+        const phases = data.phases;
+        text('media-active', data.active_media_links);
+        text('media-connections', `${phases.media.active} active HTTP connection(s)`);
+        for (const kind of ['download', 'upload']) {
+          text(`${kind}-active`, phases[kind].active);
+          text(`${kind}-completed`, `${phases[kind].completed} files ${kind === 'download' ? 'downloaded' : 'uploaded'}`);
+        }
+        for (const kind of ['media', 'download', 'upload']) {
+          text(`${kind}-bytes`, bytes(phases[kind].bytes));
+          text(`${kind}-speed`, `${bytes(phases[kind].speed_bps)}/s recent throughput`);
+        }
+        text('media-completed', phases.media.completed);
+        text('transfer-failed', Object.values(phases).reduce((sum, phase) => sum + phase.failed, 0));
+        text('transfer-incomplete', Object.values(phases).reduce((sum, phase) => sum + phase.incomplete, 0));
+        text('server-uptime', duration(data.uptime_seconds));
+        const list = byId('transfer-list'); list.replaceChildren();
+        for (const job of data.transfers) {
+          const row = document.createElement('article'); row.className = 'transfer-row';
+          const heading = document.createElement('div'); heading.className = 'transfer-heading';
+          const title = document.createElement('strong'); title.textContent = `${labels[job.kind] || 'Transfer'} #${job.id}`;
+          const percent = document.createElement('span'); percent.textContent = job.percent === null ? 'Size unknown' : `${job.percent.toFixed(1)}%`;
+          heading.append(title, percent);
+          const bar = document.createElement('progress'); bar.max = 100;
+          bar.setAttribute('aria-label', title.textContent + ' progress');
+          if (job.percent !== null) bar.value = job.percent;
+          const stats = document.createElement('div'); stats.className = 'transfer-stats';
+          for (const [label, value] of [
+            ['Transferred', `${bytes(job.bytes)} / ${job.total_bytes === null ? 'unknown' : bytes(job.total_bytes)}`],
+            ['Average speed', `${bytes(job.speed_bps)}/s`], ['Elapsed', duration(job.elapsed_seconds)], ['ETA', duration(job.eta_seconds)]
+          ]) {
+            const cell = document.createElement('div'), name = document.createElement('span'), result = document.createElement('strong');
+            name.textContent = label; result.textContent = value; cell.append(name, result); stats.append(cell);
+          }
+          row.append(heading, bar, stats); list.append(row);
+        }
+        if (!data.transfers.length || data.hidden_transfers) {
+          const note = document.createElement('div'); note.className = 'empty-state';
+          note.textContent = data.hidden_transfers ? `${data.hidden_transfers} more transfer(s) are active; showing the latest 20.` : 'No active transfers. New media downloads and Drive transfers will appear here.';
+          list.append(note);
+        }
+        byId('activity-panel').dataset.stale = 'false';
+        byId('activity-status').dataset.live = 'true'; text('activity-status', '● Live');
+        text('activity-updated', `Last updated ${new Date().toLocaleTimeString()} · Private file names and URLs are not shown.`);
+      }
+      async function refresh() {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 8000);
+        try {
+          const response = await fetch('/api/activity', { cache: 'no-store', signal: controller.signal });
+          if (!response.ok) throw new Error('Unavailable');
+          render(await response.json());
+        } catch {
+          byId('activity-panel').dataset.stale = 'true'; byId('activity-status').dataset.live = 'false';
+          text('activity-status', 'Disconnected · retrying');
+        } finally {
+          clearTimeout(timeout); setTimeout(refresh, document.hidden ? 10000 : 2000);
+        }
+      }
+      refresh();
+    })();
+  </script>
 </body>
 </html>
