@@ -522,7 +522,7 @@ async def api_get_file(file_code):
 async def api_get_movies():
     """Lists indexed movies."""
     if not await authenticated():
-        return jsonify({'status': 'error', 'message': 'Sign in at /index to browse indexed files.'}), 401, {'Cache-Control': 'no-store'}
+        return jsonify({'status': 'error', 'message': 'Sign in at /index?section=link to browse Link files.'}), 401, {'Cache-Control': 'no-store'}
     if db.movies is None:
         return jsonify({'status': 'error', 'message': 'Database not connected'}), 500
     
