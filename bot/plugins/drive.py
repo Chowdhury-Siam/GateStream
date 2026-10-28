@@ -9,6 +9,7 @@ from bot.clients import TelegramBot
 from bot.config import Drive
 from bot.modules.decorators import verify_admin, verify_user
 from bot.modules.drive import DriveTransferError, download_file, load_credentials, upload_file
+from bot.modules.activity import activity
 
 logger = logging.getLogger('bot')
 _job_lock = asyncio.Lock()
@@ -32,15 +33,22 @@ async def drive_command(_, message):
             credentials = await asyncio.to_thread(load_credentials, Drive.TOKEN_PATH, Drive.TOKEN_PICKLE_B64)
             with tempfile.TemporaryDirectory(prefix='gatestream-drive-') as directory:
                 await status.edit_text('GateStream · Downloading the file…')
-                path, name = await download_file(parts[1].strip(), directory, Drive.MAX_BYTES)
+                with activity.transfer('download') as ident:
+                    path, name = await download_file(parts[1].strip(), directory, Drive.MAX_BYTES,
+                        progress=lambda done, total: activity.progress(ident, done, total))
+                    activity.progress(ident, path.stat().st_size, path.stat().st_size)
                 await status.edit_text('GateStream · Uploading to Google Drive…')
-                task = asyncio.create_task(asyncio.to_thread(upload_file, path, name, credentials, Drive.FOLDER_ID))
-                try:
-                    result = await asyncio.shield(task)
-                except asyncio.CancelledError:
-                    # Wait for the upload thread before deleting its input file or releasing the job lock.
-                    await task
-                    raise
+                with activity.transfer('upload', path.stat().st_size) as ident:
+                    task = asyncio.create_task(asyncio.to_thread(upload_file, path, name, credentials, Drive.FOLDER_ID,
+                        progress=lambda done, total: activity.progress(ident, done, total)))
+                    try:
+                        result = await asyncio.shield(task)
+                        activity.progress(ident, path.stat().st_size)
+                    except asyncio.CancelledError:
+                        await task
+                        activity.progress(ident, path.stat().st_size)
+                        activity.finish(ident)
+                        raise
             link = result.get('webViewLink') or f"https://drive.google.com/file/d/{result['id']}/view"
             await status.edit_text(f"GateStream · Uploaded to Google Drive\n\n{name}\nFile sharing permissions were not changed.",
                 parse_mode=enums.ParseMode.DISABLED,
