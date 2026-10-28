@@ -2,7 +2,7 @@ from quart import Quart
 from uvicorn import Server as UvicornServer, Config
 from logging import getLogger
 from bot.config import Server, LOGGER_CONFIG_JSON
-from . import main, error
+from . import main, error, catalog
 
 logger = getLogger('uvicorn')
 instance = Quart(__name__)
@@ -16,6 +16,7 @@ async def before_serve():
     logger.info(f'Server running on {Server.BIND_ADDRESS}:{Server.PORT}')
 
 instance.register_blueprint(main.bp)
+instance.register_blueprint(catalog.bp)
 
 instance.register_error_handler(400, error.invalid_request)
 instance.register_error_handler(404, error.not_found)
