@@ -1,0 +1,76 @@
+name: Deploy GateStream Worker
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'cloudflare/**'
+      - '.github/workflows/deploy-cloudflare-worker.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cloudflare-worker-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+
+      - name: Test streaming proxy
+        run: node --test cloudflare/worker.test.mjs
+
+      - name: Configure Worker
+        env:
+          ORIGIN_URL: ${{ vars.CLOUDFLARE_ORIGIN_URL || secrets.CLOUDFLARE_ORIGIN_URL }}
+          WORKER_NAME: ${{ vars.CLOUDFLARE_WORKER_NAME || 'ftl-stream-proxy' }}
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const value = (process.env.ORIGIN_URL || '').trim();
+          if (!value) {
+            throw new Error('Missing CLOUDFLARE_ORIGIN_URL. Add it in GitHub Settings > Secrets and variables > Actions as a repository variable or secret, then run the workflow again.');
+          }
+          let origin;
+          try {
+            origin = new URL(value);
+          } catch {
+            throw new Error('Invalid CLOUDFLARE_ORIGIN_URL. Use a bare HTTPS URL without quotation marks, e.g. https://your-space.hf.space');
+          }
+          if (origin.protocol !== 'https:' || origin.username || origin.password ||
+              origin.pathname !== '/' || origin.search || origin.hash) {
+            throw new Error('Set CLOUDFLARE_ORIGIN_URL to a bare HTTPS origin, e.g. https://your-space.hf.space');
+          }
+          const name = process.env.WORKER_NAME;
+          if (!/^[a-z0-9][a-z0-9-]{0,62}$/.test(name)) {
+            throw new Error('CLOUDFLARE_WORKER_NAME must be 1-63 lowercase letters, digits or hyphens, starting with a letter or digit');
+          }
+          const config = JSON.parse(fs.readFileSync('cloudflare/wrangler.json', 'utf8'));
+          config.name = name;
+          config.vars = { ORIGIN_URL: origin.origin };
+          fs.writeFileSync('cloudflare/wrangler.deploy.json', JSON.stringify(config, null, 2));
+          NODE
+
+      - name: Deploy Worker
+        id: deploy
+        uses: cloudflare/wrangler-action@v4
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: cloudflare
+          wranglerVersion: '4.154.0'
+          command: deploy --config wrangler.deploy.json
+
+      - name: Show deployed URL
+        env:
+          WORKER_URL: ${{ steps.deploy.outputs.deployment-url }}
+        run: |
+          printf 'Worker URL: %s\n\nSet BASE_URL on your bot host to this URL, then restart the bot.\n' "$WORKER_URL" >> "$GITHUB_STEP_SUMMARY"
