@@ -23,13 +23,15 @@ export default {
         },
       });
     }
-    if (!['GET', 'HEAD'].includes(request.method)) {
+    const incoming = new URL(request.url);
+    const formPost = request.method === 'POST' &&
+      ['/index/login', '/index/logout', '/index/download'].includes(incoming.pathname);
+    if (!['GET', 'HEAD'].includes(request.method) && !formPost) {
       return new Response('Method not allowed', {
         status: 405, headers: { Allow: 'GET, HEAD, OPTIONS' },
       });
     }
 
-    const incoming = new URL(request.url);
     // Assign the path separately: a path beginning with // must not change the host.
     origin.pathname = incoming.pathname;
     origin.search = incoming.search;
@@ -42,6 +44,7 @@ export default {
       return await fetch(origin.toString(), {
         method: request.method,
         headers,
+        ...(formPost ? { body: request.body } : {}),
         redirect: 'manual',
       });
     } catch {
