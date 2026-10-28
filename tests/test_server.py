@@ -136,7 +136,7 @@ class DriveCommandTests(unittest.IsolatedAsyncioTestCase):
         from pathlib import Path
         paths = []
 
-        async def fail_download(url, directory, limit):
+        async def fail_download(url, directory, limit, progress=None):
             path = Path(directory) / 'payload'
             path.write_bytes(b'partial-download')
             paths.append(path)
@@ -155,7 +155,7 @@ class DriveCommandTests(unittest.IsolatedAsyncioTestCase):
         from pathlib import Path
         paths = []
 
-        async def download(url, directory, limit):
+        async def download(url, directory, limit, progress=None):
             path = Path(directory) / 'payload'
             path.write_bytes(b'abc')
             paths.append(path)
@@ -170,6 +170,41 @@ class DriveCommandTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(paths[0].exists())
         self.assertEqual(message.reply.return_value.edit_text.call_args.kwargs['reply_markup'].inline_keyboard[0][0].url,
                          'https://drive.google.com/file/d/new-file/view')
+
+
+class ActivityEndpointTests(unittest.IsolatedAsyncioTestCase):
+    async def test_live_endpoint_is_uncached_and_private(self):
+        from bot.modules.activity import TransferActivity
+        activity = TransferActivity()
+        ident = activity.start('media', 100, 'private-code')
+        activity.progress(ident, 50)
+        with patch.object(main, 'activity', activity):
+            response = await instance.test_client().get('/api/activity')
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('no-store', response.headers['Cache-Control'])
+        data = await response.get_json()
+        self.assertEqual(data['active_media_links'], 1)
+        self.assertEqual(data['phases']['media']['bytes'], 50)
+        self.assertNotIn('private-code', await response.get_data(as_text=True))
+
+    async def test_head_has_file_size_and_range_download_is_counted(self):
+        from bot.modules.activity import TransferActivity
+        activity = TransferActivity()
+        doc = dict(file_name='file.mp4', file_size=6, mime_type='video/mp4', channel_id=1, message_id=2)
+        with patch.object(main, 'activity', activity), patch.object(main, 'get_file', AsyncMock(return_value=doc)):
+            with patch.object(main, 'get_cached_chunk', AsyncMock(return_value=b'abcdef')), patch.object(main, 'is_chunk_cached', return_value=True):
+                with patch.object(main, 'add_bandwidth_bytes', AsyncMock()), patch.object(main, 'flush_ram'), patch.object(main, 'check_memory_circuit_breaker'):
+                    # Inspect ASGI headers directly: Quart's buffered test response rewrites empty HEAD bodies to length zero.
+                    async with instance.test_client().request('/dl/private-code', method='HEAD') as head:
+                        await head.send(b'')
+                        await head.send_complete()
+                    self.assertEqual(head.headers['Content-Length'], '6')
+                    self.assertEqual(activity.snapshot()['phases']['media']['bytes'], 0)
+                    response = await instance.test_client().get('/dl/private-code', headers={'Range': 'bytes=1-3'})
+                    self.assertEqual(response.status_code, 206)
+                    self.assertEqual(await response.get_data(), b'bcd')
+        phase = activity.snapshot()['phases']['media']
+        self.assertEqual((phase['bytes'],phase['completed'],phase['active']), (3,1,0))
 
 
 if __name__ == '__main__':
