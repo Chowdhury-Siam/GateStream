@@ -4,6 +4,7 @@ from quart import Blueprint, Response, request, render_template, jsonify
 from math import ceil
 from re import match as re_match
 from .error import abort
+from .catalog import authenticated
 from bot.clients import get_worker_client, TelegramBot, mark_worker_cooldown, worker_clients
 from bot.config import Telegram, Server
 from bot.database import db
@@ -11,6 +12,7 @@ from bot.database.files import get_file, add_bandwidth_bytes
 from bot.modules.telegram import get_message, get_file_properties
 from bot.modules.static import get_human_size
 from bot.modules.memory import flush_ram, check_memory_circuit_breaker
+from bot.modules.activity import activity
 from bot.modules.cache import get_cached_chunk, put_cached_chunk, is_head_or_tail, init_cache, is_chunk_cached, prefetch_tail_chunk, prefetch_head_chunk
 
 try:
@@ -35,6 +37,21 @@ async def home():
 @bp.route('/health')
 async def health_check():
     return "OK", 200
+
+
+@bp.route('/api/activity')
+async def activity_stats():
+    response = jsonify(activity.snapshot())
+    response.headers['Cache-Control'] = 'no-store, max-age=0'
+    return response
+
+
+@bp.after_request
+async def private_catalog_api(response):
+    if request.path == '/api/movies':
+        response.headers['Cache-Control'] = 'private, no-store, max-age=0'
+        response.headers['Vary'] = 'Cookie'
+    return response
 
 # Malicious vulnerability scanners and abusive scrapers to block immediately
 BLOCKED_AGENTS = (
@@ -412,7 +429,12 @@ async def transmit_file(file_code):
                 check_memory_circuit_breaker()
                 flush_ram()
 
-    return Response(file_stream(), headers=headers, status=status_code)
+    if request.method == 'HEAD':
+        response = Response(status=status_code)
+        response.automatically_set_content_length = False
+        response.headers.update(headers)
+        return response
+    return Response(activity.track_stream(file_stream(), content_length, file_code), headers=headers, status=status_code)
 
 @bp.route('/stream/<string:file_code>')
 async def stream_file(file_code):
@@ -499,6 +521,8 @@ async def api_get_file(file_code):
 @bp.route('/api/movies')
 async def api_get_movies():
     """Lists indexed movies."""
+    if not await authenticated():
+        return jsonify({'status': 'error', 'message': 'Sign in at /index to browse indexed files.'}), 401, {'Cache-Control': 'no-store'}
     if db.movies is None:
         return jsonify({'status': 'error', 'message': 'Database not connected'}), 500
     
