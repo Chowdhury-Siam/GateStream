@@ -108,3 +108,10 @@ The default Worker name remains `ftl-stream-proxy` to update existing deployment
 without changing public URLs. For a new branded endpoint, optionally set
 `CLOUDFLARE_WORKER_NAME` to `gatestream-proxy`, deploy, then use the returned URL
 as your bot host’s `BASE_URL`.
+
+### Catalog forms and ZIP downloads
+
+The Worker accepts GET/HEAD plus POST to `/index/login`, `/index/logout` and
+`/index/download`. It forwards form bodies, cookies and origin response headers
+without buffering streamed ZIPs. Other POST paths remain rejected. Redeploy the
+Worker after updating so the Link password and selected-download forms work.
