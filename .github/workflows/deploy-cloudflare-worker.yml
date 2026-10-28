@@ -2,6 +2,11 @@ name: Deploy GateStream Worker
 
 on:
   workflow_dispatch:
+    inputs:
+      worker_name:
+        description: 'Cloudflare Worker name (blank uses the repository variable or ftl-stream-proxy)'
+        required: false
+        type: string
   push:
     branches: [main]
     paths:
@@ -31,7 +36,7 @@ jobs:
       - name: Configure Worker
         env:
           ORIGIN_URL: ${{ vars.CLOUDFLARE_ORIGIN_URL || secrets.CLOUDFLARE_ORIGIN_URL }}
-          WORKER_NAME: ${{ vars.CLOUDFLARE_WORKER_NAME || 'ftl-stream-proxy' }}
+          WORKER_NAME: ${{ inputs.worker_name || vars.CLOUDFLARE_WORKER_NAME || 'ftl-stream-proxy' }}
         run: |
           node --input-type=module <<'NODE'
           import fs from 'node:fs';
@@ -51,7 +56,7 @@ jobs:
           }
           const name = process.env.WORKER_NAME;
           if (!/^[a-z0-9][a-z0-9-]{0,62}$/.test(name)) {
-            throw new Error('CLOUDFLARE_WORKER_NAME must be 1-63 lowercase letters, digits or hyphens, starting with a letter or digit');
+            throw new Error('Worker name must be 1-63 lowercase letters, digits or hyphens, starting with a letter or digit. Set the Run workflow input or CLOUDFLARE_WORKER_NAME repository variable.');
           }
           const config = JSON.parse(fs.readFileSync('cloudflare/wrangler.json', 'utf8'));
           config.name = name;
