@@ -53,7 +53,7 @@ PrivacyText = """
 
 **3. User Control:** You can revoke links anytime using the "Revoke" button or commands.
 
-**4. Your Deployment:** The hosting provider and deployment owner control the server and database. [View GateStream's source](https://github.com/Chowdhury-Siam/FTL) before deploying your own instance.
+**4. Your Deployment:** The hosting provider and deployment owner control the server and database. [View GateStream's source](https://github.com/Chowdhury-Siam/GateStream) before deploying your own instance.
 
 __By using this bot, you agree to this policy.__
 """
