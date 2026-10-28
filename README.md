@@ -1,13 +1,3 @@
----
-title: GateStream
-emoji: ✦
-colorFrom: yellow
-colorTo: gray
-sdk: docker
-app_port: 7860
-pinned: false
----
-
 <div align="center">
   <img src="bot/server/templates/brand.svg" width="88" alt="GateStream gateway logo">
   <h1>GateStream</h1>
@@ -179,8 +169,8 @@ docker build -t gatestream .
 docker run -d --name gatestream -p 8080:7860 --env-file .env -e PORT=7860 --restart unless-stopped gatestream
 ```
 
-Set `BASE_URL` for the public address mapped to this container. On Spaces,
-the existing Docker metadata and port `7860` are already configured.
+Set `BASE_URL` for the public address mapped to this container. For Spaces, use `GateStream-HuggingFace.zip`; its README includes the Docker
+SDK metadata and port `7860` configuration.
 
 ## Upgrading an existing deployment
 
