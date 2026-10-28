@@ -62,7 +62,10 @@ class DriveTests(unittest.IsolatedAsyncioTestCase):
         context.__aenter__ = AsyncMock(return_value=session)
         context.__aexit__ = AsyncMock(return_value=False)
         with tempfile.TemporaryDirectory() as directory, patch.object(drive.aiohttp, 'ClientSession', return_value=context):
-            path, name = await drive.download_file('https://example.com/a?signature=a%2Fb', directory, 10)
+            updates = []
+            path, name = await drive.download_file('https://example.com/a?signature=a%2Fb', directory, 10,
+                progress=lambda done, total: updates.append((done,total)))
+            self.assertEqual(updates, [(0,6),(3,6),(6,6)])
             self.assertEqual(path.read_bytes(), b'abcdef')
             self.assertEqual(path.parent, Path(directory))
             self.assertNotIn('/', name)
@@ -119,12 +122,15 @@ class DriveTests(unittest.IsolatedAsyncioTestCase):
             path.write_bytes(b'abc')
             result = {'id': 'file-id', 'size': '3', 'name': 'video.mp4'}
             service = MagicMock()
-            service.files.return_value.create.return_value.next_chunk.side_effect = [(None, None), (None, result)]
+            service.files.return_value.create.return_value.next_chunk.side_effect = [(SimpleNamespace(resumable_progress=2), None), (None, result)]
             context = MagicMock()
             context.__enter__.return_value = service
             media = MagicMock()
             with patch.object(drive, 'build', return_value=context), patch.object(drive, 'MediaFileUpload', return_value=media) as factory:
-                self.assertEqual(drive.upload_file(path, 'video.mp4', object(), 'folder-id'), result)
+                updates = []
+                self.assertEqual(drive.upload_file(path, 'video.mp4', object(), 'folder-id',
+                    progress=lambda done, total: updates.append((done,total))), result)
+                self.assertEqual(updates, [(2,3),(3,3)])
                 self.assertTrue(factory.call_args.kwargs['resumable'])
                 self.assertEqual(service.files.return_value.create.call_args.kwargs['body'], {'name': 'video.mp4', 'parents': ['folder-id']})
                 service.permissions.assert_not_called()
