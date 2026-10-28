@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#10100e">
   <meta name="robots" content="noindex,nofollow">
-  <title>{{ 'Media index' if unlocked else 'Unlock media index' }} · GateStream</title>
+  <title>{{ 'Index' if section == 'index' else 'Link' }} · GateStream</title>
   <style>
     * { box-sizing: border-box; }
     body { margin: 0; min-height: 100vh; background: #10100e; color: #f4f0e7; font: 15px/1.6 system-ui, sans-serif; }
@@ -14,6 +14,16 @@
     a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid #f1d89c; outline-offset: 4px; }
     nav, .brand, .heading, .pager { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
     .brand { justify-content: flex-start; gap: 12px; color: #f4f0e7; font-size: 21px; font-weight: 700; text-decoration: none; }
+    .tabs { display:flex; justify-content:flex-start; gap:10px; margin-top:32px; }
+    .tab { padding:10px 24px; border:1px solid #494437; border-radius:8px; text-decoration:none; }
+    .tab[aria-current="page"] { background:#d6ad60; color:#17130d; border-color:#d6ad60; font-weight:650; }
+    .bulk { display:flex; align-items:center; flex-wrap:wrap; gap:12px; margin:18px 0; padding:14px; border:1px solid #494437; border-radius:10px; }
+    .bulk label, .pick { display:inline-flex; align-items:center; gap:8px; margin:0; cursor:pointer; }
+    input[type="checkbox"] { width:19px; height:19px; padding:0; accent-color:#d6ad60; flex-shrink:0; }
+    button:disabled { opacity:.45; cursor:default; }
+    .bulk .muted { flex-basis:100%; }
+    .file-title { display:flex; align-items:flex-start; gap:12px; }
+    .file-title .pick { padding-top:3px; }
     .brand svg { width: 42px; height: 42px; }
     .nav-link { font-size: 12px; }
     .eyebrow { color: #d6ad60; font-size: 11px; font-weight: 650; letter-spacing: 2.5px; text-transform: uppercase; }
@@ -62,40 +72,79 @@
 <body>
   <main>
     <nav aria-label="GateStream"><a class="brand" href="/">{% include 'brand.svg' %}<span>GateStream</span></a><a class="nav-link" href="/">Back to home</a></nav>
+    <nav class="tabs" aria-label="File categories">
+      <a class="tab" href="{{ url_for('catalog.index_page') }}"{% if section == 'index' %} aria-current="page"{% endif %}>Index</a>
+      <a class="tab" href="{{ url_for('catalog.index_page', section='link') }}"{% if section == 'link' %} aria-current="page"{% endif %}>Link</a>
+    </nav>
     {% if not unlocked %}
     <section class="lock-card" aria-labelledby="login-title">
-      <p class="eyebrow">Your library awaits</p>
-      <h1 id="login-title">Unlock the index.</h1>
-      <p>Enter the library password to browse indexed media and download files.</p>
+      <p class="eyebrow">Private file links</p>
+      <h1 id="login-title">Unlock Link.</h1>
+      <p>Enter the password to browse Link files. The Index tab is free for everyone.</p>
       {% if error %}<div class="error" role="alert">{{ error }}</div>{% endif %}
       <form action="{{ url_for('catalog.index_login') }}" method="post">
         <input type="hidden" name="csrf" value="{{ csrf }}">
-        <label for="password">Library password</label>
+        <label for="password">Link password</label>
         <input id="password" name="password" type="password" autocomplete="current-password" maxlength="256" required autofocus>
-        <button class="unlock" type="submit">Unlock library →</button>
+        <button class="unlock" type="submit">Unlock Link →</button>
       </form>
       <p class="muted" style="margin-top:18px">Ask the library owner if you need the password.</p>
     </section>
     {% else %}
-    <header class="heading"><div><p class="eyebrow">Your media, indexed</p><h1>The media index.</h1><p>Browse your library. Pick a file. Press download.</p></div>
-      <form action="{{ url_for('catalog.index_logout') }}" method="post"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="ghost" type="submit">Sign out</button></form>
+    <header class="heading"><div><p class="eyebrow">{{ 'Open to everyone' if section == 'index' else 'Password protected' }}</p><h1>{{ 'The public index.' if section == 'index' else 'Your file links.' }}</h1><p>{{ 'Browse indexed batches and their episodes.' if section == 'index' else 'Browse single-file links created through the bot.' }}</p></div>
+      {% if signed_in %}<form action="{{ url_for('catalog.index_logout') }}" method="post"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="ghost" type="submit">Sign out</button></form>{% endif %}
     </header>
     <form class="filters" action="{{ url_for('catalog.index_page') }}" method="get">
+      <input type="hidden" name="section" value="{{ section }}">
       <div class="search-field"><label for="q">Search files or batch titles</label><input id="q" name="q" value="{{ query }}" placeholder="Search your library…" maxlength="100" type="search"></div>
       <div><label for="category">Category</label><select name="category" id="category"><option value="all">All categories</option>{% for value in categories %}<option value="{{ value }}"{% if category == value %} selected{% endif %}>{{ {'movies':'Movies','anime':'Anime','webseries':'Web series','direct_files':'Direct files'}[value] }}</option>{% endfor %}</select></div>
       <button type="submit">Search</button>
     </form>
-    <div class="results"><span>{{ total }} indexed file{{ '' if total == 1 else 's' }}{% if query %} matching “{{ query }}”{% endif %}</span><span>Page {{ page }} of {{ pages }}</span></div>
+    <div class="results"><span>{{ total }} {{ 'indexed' if section == 'index' else 'link' }} file{{ '' if total == 1 else 's' }}{% if query %} matching “{{ query }}”{% endif %}</span><span>Page {{ page }} of {{ pages }}</span></div>
+    <form action="{{ url_for('catalog.download_selected') }}" method="post" id="selection">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <input type="hidden" name="section" value="{{ section }}">
+      {% if files %}<div class="bulk">
+        <label><input id="select-all" type="checkbox"> Select this page</label>
+        <button id="download-selected" type="submit" disabled>Download selected (0)</button>
+        <span id="selection-count" role="status" aria-live="polite">0 selected</span>
+        <span class="muted">Download up to {{ page_size }} selected files together as one ZIP. Selection applies to this page.</span>
+      </div>{% endif %}
     <section class="files" aria-label="Indexed files">
       {% for item in files %}
-      <article class="file"><div><h2>{{ item.file_name or 'Untitled file' }}</h2><div class="meta"><span class="category">{{ {'movies':'Movie','anime':'Anime','webseries':'Web series','direct_files':'Direct file'}.get(item.category, item.category) }}</span><span>{{ get_human_size(item.file_size) }}</span>{% if item.duration_formatted and item.duration_formatted != 'N/A' %}<span>{{ item.duration_formatted }}</span>{% endif %}</div>{% if item.batch_title %}<p>{{ item.batch_title }}</p>{% endif %}</div>
+      <article class="file"><div class="file-title"><label class="pick"><input class="file-select" type="checkbox" name="code" value="{{ item.code }}" aria-label="Select {{ item.file_name or 'Untitled file' }}"></label><div><h2>{{ item.file_name or 'Untitled file' }}</h2><div class="meta"><span class="category">{{ {'movies':'Movie','anime':'Anime','webseries':'Web series','direct_files':'Direct file'}.get(item.category, item.category) }}</span><span>{{ get_human_size(item.file_size) }}</span>{% if item.duration_formatted and item.duration_formatted != 'N/A' %}<span>{{ item.duration_formatted }}</span>{% endif %}</div>{% if item.batch_title %}<p>{{ item.batch_title }}</p>{% endif %}</div></div>
         <div class="file-actions">{% if (item.file_name or '').lower().endswith(('.mp4', '.mkv', '.webm', '.mov', '.m4v', '.avi', '.ts')) %}<a href="{{ url_for('main.stream_file', file_code=item.code) }}">Watch</a>{% endif %}<a class="button" href="{{ url_for('main.transmit_file', file_code=item.code) }}" download>Download ↓</a></div>
       </article>
       {% else %}<div class="empty">{% if query or category != 'all' %}No files match these filters. Try another search.{% else %}No media has been indexed yet. Add files through the Telegram bot.{% endif %}</div>{% endfor %}
     </section>
-    <div class="pager">{% if page > 1 %}<a href="{{ url_for('catalog.index_page', page=page-1, q=query, category=category) }}">← Previous</a>{% else %}<span>First page</span>{% endif %}{% if page < pages %}<a href="{{ url_for('catalog.index_page', page=page+1, q=query, category=category) }}">Next →</a>{% else %}<span>End of results</span>{% endif %}</div>
-    <footer>GateStream · Individual files and batch episodes · Shared media links keep their existing access behavior.</footer>
+    </form>
+    <div class="pager">{% if page > 1 %}<a href="{{ url_for('catalog.index_page', page=page-1, q=query, category=category, section=section) }}">← Previous</a>{% else %}<span>First page</span>{% endif %}{% if page < pages %}<a href="{{ url_for('catalog.index_page', page=page+1, q=query, category=category, section=section) }}">Next →</a>{% else %}<span>End of results</span>{% endif %}</div>
+    <footer>GateStream · Public Index · Protected Link · ZIP downloads stream directly to your device.</footer>
     {% endif %}
   </main>
+  {% if unlocked %}<script>
+    const choices = Array.from(document.querySelectorAll('.file-select'));
+    const all = document.getElementById('select-all');
+    const download = document.getElementById('download-selected');
+    function updateSelection() {
+      if (!all) return;
+      const count = choices.filter(input => input.checked).length;
+      all.checked = count === choices.length;
+      all.indeterminate = count > 0 && count < choices.length;
+      download.disabled = count === 0;
+      download.textContent = `Download selected (${count})`;
+      document.getElementById('selection-count').textContent = `${count} selected`;
+    }
+    all?.addEventListener('change', () => {
+      choices.forEach(input => { input.checked = all.checked; });
+      updateSelection();
+    });
+    choices.forEach(input => input.addEventListener('change', updateSelection));
+    document.getElementById('selection').addEventListener('submit', event => {
+      if (!choices.some(input => input.checked)) event.preventDefault();
+    });
+    window.addEventListener('pageshow', updateSelection);
+    updateSelection();
+  </script>{% endif %}
 </body>
 </html>
