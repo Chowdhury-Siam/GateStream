@@ -42,18 +42,26 @@ the workflow after saving it. A setting on the Hugging Face host alone is not
 available to GitHub Actions.
 
 Deploying with an existing Worker name replaces that Worker's code and manages
-its variables from this workflow. Use the default name to create a separate
+its variables from this workflow. Use a different name to create a separate
 Worker if you want to keep an existing deployment.
 
 ## 3. Deploy
 
-Open **Actions → Deploy GateStream Worker → Run workflow**. The workflow tests
+Open **Actions → Deploy GateStream Worker → Run workflow**. Enter the desired
+name in **Cloudflare Worker name**, for example `gatestream-proxy`. Leave the
+field blank to use the `CLOUDFLARE_WORKER_NAME` repository variable, or
+`ftl-stream-proxy` when no variable is set. The workflow tests
 the proxy, builds the deployment configuration, and deploys through Wrangler.
 The run summary shows the deployed Worker URL. You must use the subdomain of
 your own Cloudflare account; your friend's URL is not automatically yours.
 
 Changes under `cloudflare/` or to the workflow on `main` deploy automatically.
 After changing repository variables, run the workflow manually again.
+The form's name overrides the repository variable for that run only. To use
+your chosen name for future automatic deployments too, save it as the
+`CLOUDFLARE_WORKER_NAME` repository variable. A new name creates another Worker;
+it does not rename or remove the old Worker. Update the bot host's `BASE_URL`
+if the public Worker URL changes.
 If your default branch is not `main`, adjust the workflow's `push.branches`.
 
 ## 4. Connect the bot
