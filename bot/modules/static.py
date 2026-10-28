@@ -25,6 +25,7 @@ WelcomeText = """\
 Hi **%(first_name)s**. Turn your Telegram library into stream and download links. Open a gate. Press play.
 
 **User Commands:**
+🔐 `/index` - Open the password-protected media index.
 🔍 `/search <name>` - Search movies, anime & series with streaming links.
 ⚡ `/search_api <name>` - Search and get 1-tap copyable API endpoints.
 🎬 `/link [category] <link>` - Index single file (Movie, Anime OVA, or Series).
@@ -34,6 +35,7 @@ Hi **%(first_name)s**. Turn your Telegram library into stream and download links
 ❓ `/help` - Show this help menu.
 
 **Admin Commands:**
+🔐 `/setpassword <new password>` - Change the index page password (owner only).
 ☁️ `/drive <url>` - Download a direct file link and upload it to Google Drive (optional).
 📊 `/stats` - View live database, RAM, CPU & bandwidth metrics.
 ⏱️ `/sync_duration` - Auto-backfill video duration for all past records.
