@@ -54,6 +54,8 @@ async def stream_archive(files, download):
             if response.status_code != 200:
                 raise RuntimeError('A selected file could not be downloaded')
             expected = int(response.headers['Content-Length'])
+            if 'file_size' in item and expected != int(item['file_size']):
+                raise RuntimeError('Selected file size changed during preparation')
             received = 0
             with archive.open(name, 'w', force_zip64=True) as entry:
                 while sink.chunks:
