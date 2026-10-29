@@ -134,20 +134,27 @@ resume. AniList needs no key. Optional Space Secrets `MAL_CLIENT_ID` and
 `OMDB_API_KEY` enable additional metadata providers; restart after setting them.
 See [CHANNEL_INDEX.md](CHANNEL_INDEX.md).
 
-## Resumable ZIP downloads (2.0.3)
+## Immediate and parallel ZIP downloads (2.0.5)
 
-Selecting files now prepares the ZIP first and shows progress. Once ready, the
-browser starts the download; its link supports pause/resume, HEAD, HTTP byte
-ranges and multiple download-manager connections. Start with four connections.
-The download reads the completed ZIP from disk, so Telegram delays happen during
-preparation instead of interrupting the client transfer. Host/proxy/network
-limits can still vary download speed.
+**Start immediately** now supports multiple download-manager connections and
+resume. One ZIP fills on disk in the background, while clients start receiving
+its available bytes. Every connection reads that same archive, with stable
+ETags and HTTP byte ranges. Telegram is fetched once per selected file, not once
+per client connection. Later ranges wait until their bytes have been built;
+additional connections cannot bypass Telegram throughput. Waiting connections
+may need a retry if the client or proxy times them out.
+
+**Prepare with resume** remains available: it waits for the ZIP to finish before
+starting the client download, so all ranges are already ready. Both modes can
+use four connections as a starting point. Host/proxy/network limits still affect
+speed. Create a fresh selection after updating; old immediate-mode links retain
+their previous single-connection behavior.
 
 ZIP links last 24 hours. Keep the default `ZIP_CACHE_MAX_MB=8192` (8 GiB shared
 disk budget) or set a size that fits your Space's available disk. Large selections
 must fit both that budget and free disk. `ZIP_CACHE_DIR` can point to an existing
 persistent volume if your hosting provides one. The default directory is
-`cache/archives`; do not upload its contents. One preparation runs at a time.
+`cache/archives`; do not upload its contents. One prepared-mode build and up to two live builds can run at a time.
 Expired ZIPs and interrupted partial files are cleaned when new selections are
 made. Unexpired ZIPs stay available for resume instead of being evicted.
 
@@ -156,7 +163,7 @@ that clear temporary storage require a new selection; missing archives return
 410 and are never silently regenerated for an existing partial download. Changing
 the Link password still invalidates protected ZIP links. Upload the updated
 source, restart the Space and select files again. `/health` should report
-`X-GateStream-Version: 2.0.3`.
+`X-GateStream-Version: 2.0.5`.
 
 ## Dashboard totals after a restart
 
