@@ -8,6 +8,7 @@ import time
 from contextvars import Context
 from contextlib import nullcontext
 from pathlib import Path
+from collections import deque
 
 import aiofiles
 
@@ -60,7 +61,7 @@ class ArchiveCache:
             if total + reserved + 64 * 1024 * 1024 > free:
                 raise ValueError('There is not enough space to prepare this ZIP. Select fewer files.')
             job = dict(state='queued', bytes=0, total=total, expires=expires,
-                progressive=progressive, changed=asyncio.Event())
+                progressive=progressive, changed=asyncio.Event(), samples=deque(maxlen=256))
             self.jobs[token] = job
             # A build must outlive the POST and must not retain its request context.
             job['task'] = asyncio.create_task(self._build(token, files, download, job), context=Context())
@@ -73,6 +74,7 @@ class ArchiveCache:
                 if job['expires'] <= time.time():
                     raise RuntimeError('Download link expired during preparation')
                 job['state'] = 'preparing'
+                job['samples'].append((time.monotonic(), 0))
                 async with aiofiles.open(partial, 'wb') as output:
                     os.chmod(partial, 0o600)
                     async for chunk in stream_archive(files, download):
@@ -85,6 +87,7 @@ class ArchiveCache:
                             # Publish only flushed bytes; readers must never see buffered gaps.
                             await output.flush()
                         job['bytes'] += len(chunk)
+                        job['samples'].append((time.monotonic(), job['bytes']))
                         self._notify(job)
                 if job['bytes'] != job['total']:
                     raise RuntimeError('ZIP length changed during preparation')
@@ -143,11 +146,16 @@ class ArchiveCache:
     def status(self, token, total):
         path = self.path(token)
         if path.is_file() and path.stat().st_size == total:
-            return dict(state='ready', bytes=total, total=total)
+            return dict(state='ready', bytes=total, total=total, source_speed_bps=0)
         job = self.jobs.get(token)
         if job and job['state'] != 'ready':
-            return {key: job[key] for key in ('state', 'bytes', 'total')}
-        return dict(state='missing', bytes=0, total=total)
+            now = time.monotonic()
+            samples = job['samples']
+            while len(samples) > 1 and samples[1][0] <= now - 5:
+                samples.popleft()
+            speed = (job['bytes'] - samples[0][1]) / max(.1, now - max(now - 5, samples[0][0])) if samples else 0
+            return {**{key: job[key] for key in ('state', 'bytes', 'total')}, 'source_speed_bps': speed}
+        return dict(state='missing', bytes=0, total=total, source_speed_bps=0)
 
     async def close(self):
         tasks = [job['task'] for job in self.jobs.values() if not job['task'].done()]
