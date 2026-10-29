@@ -55,7 +55,7 @@ async def prefetch_chunk(file_code: str, chunk_idx: int, total_chunks: int, targ
 
     try:
         from bot.clients import get_worker_client, TelegramBot
-        from bot.modules.telegram import get_message
+        from bot.modules.telegram import get_message, get_media_chunk
         worker = get_worker_client() or TelegramBot
         msg = target_msg
         if channel_id and message_id:
@@ -64,10 +64,10 @@ async def prefetch_chunk(file_code: str, chunk_idx: int, total_chunks: int, targ
         if not msg:
             return
 
-        async for chunk in worker.stream_media(msg, offset=chunk_idx, limit=1):
+        chunk = await get_media_chunk(worker, msg, chunk_idx)
+        if chunk:
             await put_cached_chunk(file_code, chunk_idx, chunk, total_chunks)
             logger.info("Detached prefetch saved chunk %d for %s (size %d bytes).", chunk_idx, file_code, len(chunk))
-            break
     except Exception as e:
         logger.debug("Prefetch background task exception for chunk %d: %s", chunk_idx, e)
     finally:
