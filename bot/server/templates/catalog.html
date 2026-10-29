@@ -120,7 +120,7 @@
         <span id="selection-count" role="status" aria-live="polite">0 selected</span>
         <span class="muted">Download up to {{ page_size }} selected files together as one ZIP. Selection applies to this page.</span>
       </div>{% endif %}
-    <div id="zip-ready" class="bulk" hidden><a id="zip-url" class="button" download>Download ZIP</a><button id="copy-zip" class="ghost" type="button">Copy download link</button><span id="zip-note" class="muted"></span></div>
+    <div id="zip-ready" class="bulk" hidden><a id="zip-url" class="button" download>Download ZIP</a><button id="copy-zip" class="ghost" type="button">Copy download link</button><span id="zip-note" class="muted"></span><span id="zip-source" class="muted" role="status" aria-live="polite"></span></div>
     <section class="files" aria-label="Indexed files">
       {% for item in files %}
       <article class="file"><div class="file-title"><label class="pick"><input class="file-select" type="checkbox" name="code" value="{{ item.code }}" aria-label="Select {{ item.file_name or 'Untitled file' }}"></label><div><h2>{{ item.file_name or 'Untitled file' }}</h2><div class="meta"><span class="category">{{ {'movies':'Movie','anime':'Anime','webseries':'Web series','direct_files':'Direct file'}.get(item.category, item.category) }}</span><span>{{ get_human_size(item.file_size) }}</span>{% if item.metadata_source %}<span>Matched via {{ item.metadata_source }}</span>{% elif item.metadata_status == 'unmatched' %}<span>Needs classification</span>{% endif %}{% if item.duration_formatted and item.duration_formatted != 'N/A' %}<span>{{ item.duration_formatted }}</span>{% endif %}</div>{% if item.batch_title %}<p>{{ item.batch_title }}</p>{% endif %}</div></div>
@@ -138,8 +138,29 @@
     const all = document.getElementById('select-all');
     const download = document.getElementById('download-selected');
     let preparing = false;
+    let zipMonitor = 0;
+    async function monitorLiveZip(url, generation) {
+      const label = document.getElementById('zip-source');
+      while (generation === zipMonitor) {
+        try {
+          const response = await fetch(url, {cache:'no-store'});
+          if (generation !== zipMonitor) return;
+          if (response.status === 410) { label.textContent = 'ZIP buffer unavailable. Create a new selection if the download stopped.'; return; }
+          if (!response.ok) throw new Error('Buffer status temporarily unavailable');
+          const progress = await response.json();
+          if (generation !== zipMonitor) return;
+          if (progress.state === 'ready') { label.textContent = 'ZIP fully buffered. All byte ranges are ready.'; return; }
+          label.textContent = `ZIP buffer: ${Math.floor(100 * progress.bytes / progress.total)}% · Fill rate: ${(Number(progress.source_speed_bps || 0) / 1048576).toFixed(2)} MiB/s`;
+        } catch {
+          if (generation !== zipMonitor) return;
+          label.textContent = 'Buffer status temporarily unavailable.';
+        }
+        await new Promise(resolve => setTimeout(resolve, document.hidden ? 10000 : 2000));
+      }
+    }
     function updateSelection() {
       if (!all) return;
+      zipMonitor++;
       document.getElementById('zip-ready').hidden = true;
       const count = choices.filter(input => input.checked).length;
       all.checked = count === choices.length;
@@ -159,6 +180,8 @@
       if (!choices.some(input => input.checked)) return;
       const form = event.currentTarget;
       const data = new FormData(form);
+      const generation = ++zipMonitor;
+      document.getElementById('zip-source').textContent = '';
       preparing = true;
       download.disabled = true;
       choices.forEach(input => { input.disabled = true; });
@@ -185,6 +208,8 @@
         document.getElementById('zip-note').textContent = `${note} Link valid for 24 hours.`;
         status.textContent = result.mode === 'stream' ? 'ZIP download starting. Use Download ZIP to retry.' : 'ZIP ready. Resume and multiple connections supported.';
         link.click();
+        if (result.mode === 'stream') monitorLiveZip(result.status_url, generation);
+        else document.getElementById('zip-source').textContent = 'ZIP fully buffered. All byte ranges are ready.';
       } catch (error) {
         status.textContent = error.message;
       } finally {
