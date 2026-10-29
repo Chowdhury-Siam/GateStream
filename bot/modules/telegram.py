@@ -1,6 +1,6 @@
 import asyncio
 import time
-from collections import OrderedDict
+from collections import OrderedDict, deque
 from contextlib import aclosing
 from hydrogram import Client
 from hydrogram.types import Message
@@ -21,6 +21,54 @@ _MESSAGE_CACHE: OrderedDict[tuple, tuple[Message, float]] = OrderedDict()
 _CACHE_MAX_SIZE = 80
 _CACHE_TTL = 3600  # 1 hour
 MEDIA_READ_TIMEOUT = 18.0
+
+
+async def iter_parallel_ranges(read, start, count):
+    """Overlap four continuous four-chunk reads, with a bounded ordered buffer."""
+    pending = deque()
+    end = start + count
+
+    def schedule(first):
+        size = min(4, end - first)
+        queue = asyncio.Queue(maxsize=size + 1)
+
+        async def fill():
+            try:
+                async with aclosing(read(first, size)) as stream:
+                    async for chunk in stream:
+                        await queue.put(chunk)
+            except Exception as error:
+                await queue.put(error)
+            else:
+                await queue.put(None)
+
+        pending.append((asyncio.create_task(fill()), queue))
+        return first + size
+
+    next_start = start
+    try:
+        while len(pending) < 4 and next_start < end:
+            next_start = schedule(next_start)
+        while pending:
+            task, queue = pending[0]
+            while True:
+                chunk = await queue.get()
+                if chunk is None:
+                    break
+                if isinstance(chunk, Exception):
+                    raise chunk
+                yield chunk
+            await task
+            pending.popleft()
+            if next_start < end:
+                next_start = schedule(next_start)
+    finally:
+        tasks = [task for task, _ in pending]
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
 
 
 async def iter_media_chunks(client, message, offset, limit):
