@@ -115,8 +115,9 @@ class IndexRouteTests(unittest.IsolatedAsyncioTestCase):
         storage = SimpleNamespace(insert_one=insert, find_one=find)
         files = [dict(code='episode1', file_name='../same.mp4', file_size=4),
                  dict(code='episode2', file_name='বাংলা.mp4', file_size=4)]
-        async def download(code, range_allowed=True):
+        async def download(code, range_allowed=True, parallel=False):
             self.assertFalse(range_allowed)
+            self.assertTrue(parallel)
             async def body():
                 yield b'ab'
                 yield b'cd'
