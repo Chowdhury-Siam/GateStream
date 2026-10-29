@@ -204,7 +204,10 @@ selected** to receive up to 30 files in one ZIP. Selection applies to the curren
 page; changing the page or filters resets it. The server checks every selected
 code against its section, so a public ZIP request cannot include private Link
 records. ZIP64 supports large files. Files stream sequentially into the ZIP with
-no whole-archive RAM buffer or temporary media copy. ZIPs are uncompressed and
+no whole-archive RAM buffer or temporary media copy. Each active ZIP source
+uses up to four concurrent Telegram chunk reads, including with a single bot,
+and emits them in order. This overlaps request latency; total throughput still
+depends on Telegram, the host and the network. ZIPs are uncompressed and
 cannot be resumed; for resumable downloads use the individual Download buttons.
 Selection now creates a temporary GET URL ending in `.zip`, with a filename,
 Content-Length and HEAD support. It works in an external download manager
@@ -273,8 +276,26 @@ previous values stay dimmed and the panel shows disconnected until it reconnects
 
 The public endpoint exposes aggregate counts and anonymous activity numbers,
 without file names, URLs, file codes, Drive IDs, credentials or user IDs.
-Counters are held in memory in one server process and reset when it restarts.
-These are not persistent or multi-replica analytics. Media byte totals measure
+Cumulative bytes, completed counts and failed/incomplete counts are stored in
+MongoDB `analytics`, document `transfer_activity`. They are restored at startup,
+checkpointed every five seconds, and flushed during normal web shutdown and
+`/restart`. Active connections, active rows, current speeds and uptime remain
+live session values and correctly start at zero after a restart. Previously
+active transfers from the saved checkpoint are counted as incomplete.
+
+A hard kill or power loss can lose work since the last successful checkpoint
+(normally up to five seconds); a database outage can extend that window. Failed
+reads do not overwrite stored totals with zeros, failed writes are retried
+without adding totals twice, and the dashboard shows a save/restore warning.
+Chunks never wait for statistics database writes. Use the same `DATABASE_URL`
+and `DATABASE_NAME` to preserve totals. This uses one writer per deployment;
+it does not aggregate multiple replicas. Existing media bytes can be seeded
+from the older `analytics.bandwidth` record on first upgrade. Historical Drive
+counts and other totals that were never saved cannot be reconstructed. The
+media-only `/backup` export does not include these analytics records; a full
+database backup does.
+
+Media byte totals measure
 bytes handed to HTTP responses, not proof a client saved a whole file. Drive
 upload bytes are acknowledged chunks; successful uploads are size-verified.
 Failed/incomplete transfers retain their partial byte totals. The existing
