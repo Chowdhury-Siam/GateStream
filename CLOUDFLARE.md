@@ -123,3 +123,7 @@ The server supplies Content-Length and the Worker forwards it. ZIPs use one
 connection and cannot be resumed; do not enable forced parallel ranges for
 these URLs. Tickets expire after one hour and Link password changes invalidate
 private tickets. Do not share a ticket URL beyond its intended recipients.
+
+ZIP source reads are now pipelined concurrently inside GateStream, even though
+the ZIP uses one external HTTP connection. This server-side optimization needs
+a bot host update/restart; it does not require changing the Worker.
