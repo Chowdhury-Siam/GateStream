@@ -134,7 +134,7 @@ resume. AniList needs no key. Optional Space Secrets `MAL_CLIENT_ID` and
 `OMDB_API_KEY` enable additional metadata providers; restart after setting them.
 See [CHANNEL_INDEX.md](CHANNEL_INDEX.md).
 
-## Immediate and parallel ZIP downloads (2.0.5)
+## Immediate and parallel ZIP downloads (2.0.6)
 
 **Start immediately** now supports multiple download-manager connections and
 resume. One ZIP fills on disk in the background, while clients start receiving
@@ -143,6 +143,16 @@ ETags and HTTP byte ranges. Telegram is fetched once per selected file, not once
 per client connection. Later ranges wait until their bytes have been built;
 additional connections cannot bypass Telegram throughput. Waiting connections
 may need a retry if the client or proxy times them out.
+
+Version 2.0.6 overlaps four continuous 4 MiB Telegram ranges per ZIP source,
+with ordered bounded buffers and retry from the last complete chunk of a
+stalled range. It avoids reopening a Telegram stream for every MiB and skips
+unnecessary detached head/tail prefetch for ZIPs. Source buffering stays around
+16–20 MiB per builder. The page now shows ZIP buffer percentage and fill rate,
+which helps distinguish slow source delivery from client/proxy download limits.
+Constant throughput still depends on Telegram and the host/network. Real-host
+throughput must be checked after deployment; local latency simulations do not
+predict an exact production speed.
 
 **Prepare with resume** remains available: it waits for the ZIP to finish before
 starting the client download, so all ranges are already ready. Both modes can
@@ -163,7 +173,7 @@ that clear temporary storage require a new selection; missing archives return
 410 and are never silently regenerated for an existing partial download. Changing
 the Link password still invalidates protected ZIP links. Upload the updated
 source, restart the Space and select files again. `/health` should report
-`X-GateStream-Version: 2.0.5`.
+`X-GateStream-Version: 2.0.6`.
 
 ## Dashboard totals after a restart
 
