@@ -1,4 +1,4 @@
-"""Thread-safe, process-local activity counters; never expose private source data."""
+"""Thread-safe activity counters with restart-safe cumulative checkpoints."""
 import asyncio
 import time
 from collections import deque
@@ -16,6 +16,36 @@ class TransferActivity:
         self.totals = {kind: dict(bytes=0, completed=0, failed=0, incomplete=0)
                        for kind in ('media', 'download', 'upload')}
         self.traffic = {kind: deque() for kind in self.totals}
+        self.restored = False
+        self.persistence = dict(state='pending', last_saved_at=None)
+
+    def restore(self, phases):
+        """Add saved totals once; jobs/rates from an old process cannot stay active."""
+        if not isinstance(phases, dict):
+            raise ValueError('Invalid activity checkpoint')
+        with self.lock:
+            if self.restored:
+                return
+            historical = {}
+            for kind, totals in self.totals.items():
+                saved = phases.get(kind, {})
+                historical[kind] = {key: max(0, int(saved.get(key, 0))) for key in totals}
+                historical[kind]['incomplete'] += max(0, int(saved.get('active', 0)))
+            for kind, values in historical.items():
+                for key, value in values.items():
+                    self.totals[kind][key] += value
+            self.restored = True
+
+    def checkpoint(self):
+        with self.lock:
+            return {kind: {**totals, 'active': sum(job['kind'] == kind for job in self.jobs.values())}
+                    for kind, totals in self.totals.items()}
+
+    def saved_state(self, state, timestamp=None):
+        with self.lock:
+            self.persistence['state'] = state
+            if timestamp is not None:
+                self.persistence['last_saved_at'] = timestamp
 
     def start(self, kind, total=None, key=None):
         with self.lock:
@@ -104,7 +134,7 @@ class TransferActivity:
                     total_bytes=total, elapsed_seconds=elapsed, speed_bps=speed,
                     percent=min(100, 100 * job['done'] / total) if total else None,
                     eta_seconds=max(0, (total - job['done']) / speed) if total is not None and speed > 0 else None))
-            return dict(uptime_seconds=max(0, now - self.started), phases=phases,
+            return dict(uptime_seconds=max(0, now - self.started), phases=phases, persistence=dict(self.persistence),
                 active_media_links=len({job['key'] for job in self.jobs.values() if job['kind'] == 'media'}),
                 transfers=transfers, hidden_transfers=max(0, len(self.jobs) - len(transfers)))
 
