@@ -4,6 +4,7 @@ from logging import getLogger
 from bot.config import Server, LOGGER_CONFIG_JSON
 from . import main, error, catalog
 from bot.modules.activity_store import activity_store
+from bot.modules.archive_cache import archive_cache
 
 logger = getLogger('uvicorn')
 instance = Quart(__name__)
@@ -21,6 +22,7 @@ async def before_serve():
 
 @instance.after_serving
 async def after_serve():
+    await archive_cache.close()
     await activity_store.flush()
 
 
