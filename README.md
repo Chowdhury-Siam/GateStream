@@ -206,7 +206,7 @@ page; changing the page or filters resets it. The server checks every selected
 code against its section, so a public ZIP request cannot include private Link
 records. ZIP64 supports large files.
 
-Version 2.0.5 offers two choices before downloading selected files:
+Version 2.0.6 offers two choices before downloading selected files:
 
 | Option | Starts | Resume and multiple connections |
 | --- | --- | --- |
@@ -226,7 +226,22 @@ Both modes reserve their total size in the same 8 GiB temporary-disk budget.
 Up to two live ZIP builders run independently of the one-at-a-time preparation
 queue. Extra live jobs or selections exceeding capacity fail with a clear
 message. All clients share one builder per ticket, so connection count does not
-multiply Telegram source reads. GET links last 24 hours and retain the same
+multiply Telegram source reads. Since 2.0.6, each builder overlaps up to four
+continuous 4 MiB Telegram range streams instead of feeding the ZIP through one
+serial source stream. Ordered queues bound buffering to roughly 16–20 MiB per
+builder. A stalled range retries from its last complete chunk, preserving byte
+order without duplicating already read data. The first real chunk warms each
+worker’s media session before overlapping range reads, avoiding concurrent
+session-start races. Browser playback and individual
+file downloads retain their existing paths. Detached head/tail prefetch is
+skipped for internal ZIP reads, avoiding extra competing requests.
+
+The live download panel shows ZIP buffer percentage and its five-second fill
+rate. This measures bytes arriving in the ZIP cache, not your phone's download
+speed. If the fill rate drops while the client is waiting, the source side is
+the limiting stage; if the ZIP is fully buffered, remaining variability is in
+disk serving, the proxy, or the client/network. Parallel reads overlap latency
+but cannot guarantee constant bandwidth or remove Telegram/hosting limits. GET links last 24 hours and retain the same
 section and password-revocation rules. Older streaming links remain single
 connection; make a new selection to use the live range support.
 
