@@ -78,6 +78,14 @@ class BulkPipelineTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(state['peak'],1)
         self.assertEqual(state['calls'],[(0,len(chunks))])
 
+    async def test_archive_preparation_needs_no_request_context_and_is_not_viewer_traffic(self):
+        stack,state,chunks=self.fixture()
+        with stack:
+            response=await main.transmit_file('code',range_allowed=False,internal=True)
+            self.assertEqual(await response.get_data(),b''.join(chunks))
+            main.add_bandwidth_bytes.assert_not_awaited()
+            self.assertEqual(main.activity.snapshot()['phases']['media']['bytes'],0)
+
     async def test_continuous_download_recovers_stall_without_repeating_bytes(self):
         import io
         from zipfile import ZipFile
