@@ -78,6 +78,9 @@ async def restart_command(_, msg: Message):
 
     await asyncio.sleep(1.5)
 
+    from bot.modules.activity_store import activity_store
+    await activity_store.flush()
+
     # Replace current python process
     os.execl(sys.executable, sys.executable, "-m", "bot")
 
