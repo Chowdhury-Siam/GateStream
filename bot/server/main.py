@@ -79,7 +79,7 @@ async def security_and_bot_check():
 # ==================== STREAM & DOWNLOAD ROUTES ====================
 
 @bp.route('/dl/<string:file_code>')
-async def transmit_file(file_code, range_allowed=True, parallel=False):
+async def transmit_file(file_code, range_allowed=True, parallel=False, internal=False):
     # Lookup file record in MongoDB
     doc = await get_file(file_code)
     if not doc:
@@ -113,7 +113,7 @@ async def transmit_file(file_code, range_allowed=True, parallel=False):
         file_size = file_size or f_size
         mime_type = mime_type or m_type
 
-    range_header = request.headers.get('Range') if range_allowed else None
+    range_header = request.headers.get('Range') if range_allowed and not internal else None
     start = 0
     end = file_size - 1
     chunk_size = 1024 * 1024  # 1 MB
@@ -141,7 +141,7 @@ async def transmit_file(file_code, range_allowed=True, parallel=False):
 
     # Default to 'attachment' so direct download links automatically download the file in browsers.
     # Use 'inline' only when ?stream=1 or ?inline=1 is specified (e.g. by HTML5 video player in player.html).
-    is_streaming = (request.args.get('stream') or request.args.get('inline')) and not (request.args.get('dl') or request.args.get('download'))
+    is_streaming = False if internal else (request.args.get('stream') or request.args.get('inline')) and not (request.args.get('dl') or request.args.get('download'))
     disposition = 'inline' if is_streaming else 'attachment'
 
     headers = {
@@ -206,7 +206,7 @@ async def transmit_file(file_code, range_allowed=True, parallel=False):
 
         # If all requested data was served directly from cache (0ms delay), we are done without touching Telegram!
         if curr_chunks_needed <= 0 or bytes_streamed >= content_length:
-            if bytes_streamed > 0:
+            if bytes_streamed > 0 and not internal:
                 await add_bandwidth_bytes(bytes_streamed)
             check_memory_circuit_breaker()
             flush_ram()
@@ -340,7 +340,7 @@ async def transmit_file(file_code, range_allowed=True, parallel=False):
                 if pending_tasks:
                     await asyncio.gather(*pending_tasks.values(), return_exceptions=True)
                 pending_tasks.clear()
-                if bytes_streamed > 0:
+                if bytes_streamed > 0 and not internal:
                     await add_bandwidth_bytes(bytes_streamed)
                 check_memory_circuit_breaker()
                 flush_ram()
@@ -419,17 +419,18 @@ async def transmit_file(file_code, range_allowed=True, parallel=False):
             except (asyncio.CancelledError, GeneratorExit):
                 pass
             finally:
-                if bytes_streamed > 0:
+                if bytes_streamed > 0 and not internal:
                     await add_bandwidth_bytes(bytes_streamed)
                 check_memory_circuit_breaker()
                 flush_ram()
 
-    if request.method == 'HEAD':
+    if not internal and request.method == 'HEAD':
         response = Response(status=status_code)
         response.automatically_set_content_length = False
         response.headers.update(headers)
         return response
-    return Response(activity.track_stream(file_stream(), content_length, file_code), headers=headers, status=status_code)
+    body = file_stream() if internal else activity.track_stream(file_stream(), content_length, file_code)
+    return Response(body, headers=headers, status=status_code)
 
 @bp.route('/stream/<string:file_code>')
 async def stream_file(file_code):
