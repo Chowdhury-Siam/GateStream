@@ -10,6 +10,35 @@ stream_archive = module.stream_archive
 
 
 class ArchiveTests(unittest.IsolatedAsyncioTestCase):
+    async def test_exact_content_length_for_ascii_unicode_and_multiple_files(self):
+        from zipfile import ZipFile
+        import io
+        for files in [[], [dict(code='one', file_name='a.mp4', file_size=11)],
+                      [dict(code='one', file_name='বাংলা.mp4', file_size=11), dict(code='two', file_name='a.mp4', file_size=11)]]:
+            async def download(code):
+                async def body(): yield b'hello world'
+                return Response(body(), headers={'Content-Length':'11'})
+            data = b''.join([chunk async for chunk in stream_archive(files,download)])
+            self.assertEqual(len(data),module.archive_size(files))
+            with ZipFile(io.BytesIO(data)) as archive:
+                self.assertIsNone(archive.testzip())
+
+    def test_zip64_length_includes_large_entry_and_offset_extensions(self):
+        from zipfile import ZipFile, ZIP64_LIMIT
+        class VirtualBytes(bytes):
+            def __new__(cls, size):
+                value = super().__new__(cls, b'')
+                value.size = size
+                return value
+            def __len__(self): return self.size
+        files=[dict(file_name='large.mkv',file_size=ZIP64_LIMIT+100),dict(file_name='small.mp4',file_size=11)]
+        sink=module._Sink()
+        with ZipFile(sink,'w') as archive:
+            for index,item in enumerate(files,1):
+                with archive.open(module.archive_name(index,item),'w',force_zip64=True) as entry:
+                    entry.write(VirtualBytes(item['file_size']))
+        self.assertEqual(sink.tell(),module.archive_size(files))
+
     async def test_truncated_source_cannot_produce_successful_zip(self):
         async def download(code):
             async def body():
