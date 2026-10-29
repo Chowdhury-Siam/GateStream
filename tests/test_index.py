@@ -127,7 +127,7 @@ class IndexRouteTests(unittest.IsolatedAsyncioTestCase):
                  dict(code='episode2', file_name='বাংলা.mp4', file_size=4)]
         async def download(code, range_allowed=True, parallel=False, internal=False):
             self.assertFalse(range_allowed)
-            self.assertFalse(parallel)
+            self.assertTrue(parallel)
             self.assertTrue(internal)
             async def body():
                 yield b'ab'
@@ -253,9 +253,10 @@ class IndexRouteTests(unittest.IsolatedAsyncioTestCase):
         storage = SimpleNamespace(insert_one=insert,find_one=AsyncMock(side_effect=lambda q:tickets.get(q['_id'])))
         files = [dict(code='one',file_name='one.bin',file_size=4)]
         form = dict(csrf=await self.csrf(),section='index',mode='stream',code='one')
-        async def download(code,range_allowed=True,internal=False):
+        async def download(code,range_allowed=True,internal=False,parallel=False):
             self.assertFalse(range_allowed)
             self.assertTrue(internal)
+            self.assertTrue(parallel)
             async def body():
                 yield b'ab'
                 yield b'cd'
