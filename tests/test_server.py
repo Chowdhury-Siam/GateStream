@@ -46,6 +46,17 @@ class ServerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn('https://user-app.hf.space/dl/test-code', await response.get_data(as_text=True))
 
+    async def test_movie_batch_episode_resolves_by_its_download_code(self):
+        from bot.database import files, db
+        batch = dict(_id='batch', channel_id=1, category='movies', episodes=[dict(
+            code='episode', message_id=2, file_name='Movie.mp4', file_size=4, mime_type='video/mp4')])
+        collection = SimpleNamespace(find_one=AsyncMock(side_effect=[None,batch]))
+        with patch.multiple(db,movies=collection,anime=None,webseries=None,direct_files=None):
+            document = await files.get_file('episode')
+        self.assertEqual(document['code'],'episode')
+        self.assertEqual(document['category'],'movies')
+        self.assertEqual(document['channel_id'],1)
+
     async def test_unknown_file_is_404(self):
         with patch.object(main, 'get_file', AsyncMock(return_value=None)):
             response = await instance.test_client().get('/dl/missing-code')
