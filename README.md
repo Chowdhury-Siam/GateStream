@@ -206,8 +206,11 @@ code against its section, so a public ZIP request cannot include private Link
 records. ZIP64 supports large files. Files stream sequentially into the ZIP with
 no whole-archive RAM buffer or temporary media copy. Each active ZIP source
 uses up to four concurrent Telegram chunk reads, including with a single bot,
-and emits them in order. This overlaps request latency; total throughput still
-depends on Telegram, the host and the network. ZIPs are uncompressed and
+and emits them in order. Version 2.0.1 fully drains each limited Telegram
+stream before returning its chunk, releasing the underlying download slot. This
+fixes a slot leak that could stall ZIPs after the first few MiB; head/tail
+prefetch uses the same fix. This overlaps request latency; total throughput
+still depends on Telegram, the host and the network. ZIPs are uncompressed and
 cannot be resumed; for resumable downloads use the individual Download buttons.
 Selection now creates a temporary GET URL ending in `.zip`, with a filename,
 Content-Length and HEAD support. It works in an external download manager
