@@ -209,7 +209,7 @@ async def download_archive(token, filename):
     from .main import transmit_file
 
     async def download(code):
-        return await transmit_file(code, range_allowed=False, parallel=True)
+        return await transmit_file(code, range_allowed=False)
 
     @stream_with_context
     async def archive():
