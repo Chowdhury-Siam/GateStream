@@ -137,7 +137,7 @@ class IndexRouteTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(catalog, 'list_files', AsyncMock(return_value=data)):
             response = await self.client.get('/index', scheme='https')
         csrf = re.search(r'name="csrf" value="([^"]+)"', await response.get_data(as_text=True)).group(1)
-        form = MultiDict([('csrf', csrf), ('section', 'index'), ('code', 'episode1'), ('code', 'episode2')])
+        form = MultiDict([('csrf', csrf), ('section', 'index'), ('mode', 'prepare'), ('code', 'episode1'), ('code', 'episode2')])
         async def post(json=False):
             return await self.client.post('/index/download', data=urlencode(list(form.items(multi=True))),
                 headers={'Content-Type':'application/x-www-form-urlencoded', 'Accept':'application/json' if json else 'text/html'}, scheme='https')
@@ -230,6 +230,9 @@ class IndexRouteTests(unittest.IsolatedAsyncioTestCase):
         body = await response.get_data(as_text=True)
         self.assertIn('/dl/test-code', body)
         self.assertIn('Download', body)
+        self.assertIn('Start immediately', body)
+        self.assertIn('Prepare with resume', body)
+        self.assertIn('Resume and multiple connections', body)
         self.assertIn('Season 1', body)
         self.assertIn('&lt;script&gt;', body)
         self.assertNotIn('<script>alert(1)</script>', body)
@@ -239,6 +242,64 @@ class IndexRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.client.post('/index/logout', form={'csrf': csrf}, scheme='https')).status_code, 302)
         body = await (await self.client.get('/index?section=link', scheme='https')).get_data(as_text=True)
         self.assertIn('Unlock Link', body)
+
+    async def test_immediate_mode_shares_one_build_supports_ranges_and_enforces_access(self):
+        import io
+        from zipfile import ZipFile
+        from quart import Response
+        from bot.server import main
+        tickets = {}
+        async def insert(document): tickets[document['_id']] = document
+        storage = SimpleNamespace(insert_one=insert,find_one=AsyncMock(side_effect=lambda q:tickets.get(q['_id'])))
+        files = [dict(code='one',file_name='one.bin',file_size=4)]
+        form = dict(csrf=await self.csrf(),section='index',mode='stream',code='one')
+        async def download(code,range_allowed=True,internal=False):
+            self.assertFalse(range_allowed)
+            self.assertTrue(internal)
+            async def body():
+                yield b'ab'
+                yield b'cd'
+            return Response(body(),headers={'Content-Length':'4'})
+        manager = instance.test_client()
+        with patch.object(catalog.db,'db',{'download_tickets':storage}), \
+             patch.object(catalog,'selected_files',AsyncMock(return_value=files)), \
+             patch.object(main,'transmit_file',AsyncMock(side_effect=download)) as source:
+            response = await self.client.post('/index/download',form=form,scheme='https')
+            self.assertEqual(response.status_code,303)
+            link = response.headers['Location']
+            self.assertTrue(link.endswith('/GateStream-index.zip'))
+            token = link.split('/')[-2]
+            status = await manager.get(f'/index/archive/{token}/status',scheme='https')
+            self.assertIn(status.status_code,(200,202))
+            async with manager.request(link,method='HEAD',scheme='https') as head:
+                await head.send(b'')
+                await head.send_complete()
+            self.assertEqual(head.status_code,200)
+            self.assertEqual(head.headers['Accept-Ranges'],'bytes')
+            response = await manager.get(link,scheme='https')
+            self.assertEqual(response.status_code,200)
+            payload = await response.get_data()
+            partial = await manager.get(link,headers={'Range':'bytes=0-9'},scheme='https')
+            self.assertEqual(partial.status_code,206)
+            self.assertEqual(await partial.get_data(),payload[:10])
+            self.assertEqual(source.await_count,1)
+            self.assertEqual(len(payload),int(head.headers['Content-Length']))
+            with ZipFile(io.BytesIO(payload)) as archive:
+                self.assertIsNone(archive.testzip())
+                self.assertEqual(archive.read('01-one.bin'),b'abcd')
+            response = await self.client.post('/index/download',form=form,headers={'Accept':'application/json'},scheme='https')
+            self.assertEqual((await response.get_json())['mode'],'stream')
+            form['mode'] = 'invalid'
+            self.assertEqual((await self.client.post('/index/download',form=form,scheme='https')).status_code,400)
+            form.update(mode='stream',section='link')
+            self.assertEqual((await self.client.post('/index/download',form=form,scheme='https')).status_code,401)
+            await self.login()
+            response = await self.client.post('/index/download',form=form,scheme='https')
+            private_link = response.headers['Location']
+            self.assertEqual((await manager.get(private_link,scheme='https')).status_code,200)
+            self.settings.return_value = index_access._record('Changed password')
+            self.assertEqual((await manager.get(private_link,scheme='https')).status_code,410)
+            self.assertTrue(all(job['progressive'] for job in self.zip_cache.jobs.values()))
 
     async def test_preparation_progress_restart_and_missing_cache_fail_closed(self):
         from datetime import datetime, timedelta, timezone
@@ -280,6 +341,65 @@ class IndexRouteTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual((await self.client.get(link,scheme='https')).status_code,410)
             ticket['archive_version'] = 0
             self.assertEqual((await self.client.get(link,scheme='https')).status_code,410)
+
+    async def test_live_http_ranges_resume_before_and_after_archive_completion(self):
+        from datetime import datetime, timedelta, timezone
+        from quart import Response
+        from bot.modules.archive import archive_size
+        from bot.modules.archive_cache import ArchiveCache
+        from zipfile import ZipFile
+        import io
+        token='c'*43
+        files=[dict(code='one',file_name='one.bin',file_size=4)]
+        ticket=dict(_id=token,section='index',codes=['one'],files=files,mode='stream',archive_version=3,
+            expires_at=datetime.now(timezone.utc)+timedelta(hours=24))
+        entered,release=asyncio.Event(),asyncio.Event()
+        calls=[]
+        async def download(code):
+            calls.append(code)
+            async def body():
+                yield b'ab'
+                entered.set()
+                await release.wait()
+                yield b'cd'
+            return Response(body(),headers={'Content-Length':'4'})
+        await self.zip_cache.start(token,files,download,ticket['expires_at'].timestamp(),progressive=True)
+        await asyncio.wait_for(entered.wait(),1)
+        link=f'/index/archive/{token}/GateStream-index.zip'
+        with patch.object(catalog.db,'db',{'download_tickets':SimpleNamespace(find_one=AsyncMock(return_value=ticket))}), \
+             patch.object(catalog,'selected_files',AsyncMock(return_value=files)):
+            async with self.client.request(link,method='HEAD',scheme='https') as head:
+                await head.send(b'')
+                await head.send_complete()
+            etag=head.headers['ETag']
+            self.assertEqual(head.headers['Accept-Ranges'],'bytes')
+            self.assertEqual(int(head.headers['Content-Length']),archive_size(files))
+            prefix=await asyncio.wait_for(self.client.get(link,headers={'Range':'bytes=0-1'},scheme='https'),1)
+            self.assertEqual(prefix.status_code,206)
+            self.assertEqual(await prefix.get_data(),b'PK')
+            self.assertFalse(self.zip_cache.jobs[token]['task'].done())
+            suffix=asyncio.create_task(self.client.get(link,headers={'Range':'bytes=-22','If-Range':etag},scheme='https'))
+            resumed=asyncio.create_task(self.client.get(link,headers={'Range':'bytes=2-','If-Range':etag},scheme='https'))
+            await asyncio.sleep(.01)
+            self.assertFalse(suffix.done())
+            release.set()
+            tail,rest=await asyncio.wait_for(asyncio.gather(suffix,resumed),1)
+            self.assertEqual(tail.status_code,206)
+            self.assertEqual(rest.status_code,206)
+            payload=b'PK'+await rest.get_data()
+            self.assertEqual(await tail.get_data(),payload[-22:])
+            self.assertEqual(rest.headers['ETag'],etag)
+            with ZipFile(io.BytesIO(payload)) as archive:
+                self.assertIsNone(archive.testzip())
+                self.assertEqual(archive.read('01-one.bin'),b'abcd')
+            await self.zip_cache.jobs[token]['task']
+            restarted=ArchiveCache(self.zip_directory.name,self.zip_cache.max_bytes)
+            with patch.object(catalog,'archive_cache',restarted):
+                response=await self.client.get(link,headers={'Range':'bytes=17-','If-Range':etag},scheme='https')
+                self.assertEqual(response.status_code,206)
+                self.assertEqual(response.headers['ETag'],etag)
+                self.assertEqual(await response.get_data(),payload[17:])
+            self.assertEqual(calls,['one'])
 
     async def test_large_archive_ranges_seek_past_two_gibibytes(self):
         from datetime import datetime, timedelta, timezone
