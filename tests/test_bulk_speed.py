@@ -15,9 +15,9 @@ with patch.dict(os.environ, {
 
 
 class BulkPipelineTests(unittest.IsolatedAsyncioTestCase):
-    def fixture(self, block=False):
+    def fixture(self, block=False, chunk_count=6):
         chunk_size = 1024 * 1024
-        chunks = [bytes([index]) * chunk_size for index in range(5)] + [b'last seventeen!!!']
+        chunks = [bytes([index % 256]) * chunk_size for index in range(chunk_count-1)] + [b'last seventeen!!!']
         state = dict(active=0, peak=0, cancelled=0, calls=[])
 
         async def stream_media(message, offset=0, limit=0):
@@ -57,7 +57,7 @@ class BulkPipelineTests(unittest.IsolatedAsyncioTestCase):
         return stack,state,chunks
 
     async def test_zip_source_fetches_concurrently_with_one_bot_and_keeps_byte_order(self):
-        stack,state,chunks=self.fixture()
+        stack,state,chunks=self.fixture(chunk_count=17)
         with stack:
             async with instance.test_request_context('/index/archive/ticket/GateStream.zip'):
                 response=await main.transmit_file('code',range_allowed=False,parallel=True)
@@ -65,7 +65,8 @@ class BulkPipelineTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(data,b''.join(chunks))
         self.assertGreater(state['peak'],1)
         self.assertLessEqual(state['peak'],4)
-        self.assertEqual(sorted(state['calls']),[(i,1) for i in range(len(chunks))])
+        self.assertEqual(sorted(state['calls']),[(i,min(4,len(chunks)-i)) for i in range(0,len(chunks),4)])
+        self.assertEqual(state['peak'],4)
         self.assertEqual(state['active'],0)
 
     async def test_individual_download_keeps_continuous_stream_for_manager_ranges(self):
@@ -200,3 +201,52 @@ class BulkPipelineTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(await anext(body.__aiter__()),chunks[0])
         self.assertEqual(state['active'],0)
         self.assertGreater(state['cancelled'],0)
+
+    async def test_parallel_continuous_ranges_retry_from_last_good_chunk(self):
+        from bot.modules import telegram
+        stack,state,chunks=self.fixture()
+        calls=[]
+        with stack:
+            worker=main.get_worker_client()
+            original=worker.stream_media
+            async def stream_media(message,offset=0,limit=0):
+                calls.append((offset,limit))
+                if offset==0:
+                    async for chunk in original(message,0,1):
+                        yield chunk
+                    await asyncio.Event().wait()
+                else:
+                    async for chunk in original(message,offset,limit):
+                        yield chunk
+            with patch.object(worker,'stream_media',stream_media), \
+                 patch.object(telegram,'MEDIA_READ_TIMEOUT',.1), \
+                 patch.object(main,'mark_worker_cooldown'):
+                response=await main.transmit_file('code',range_allowed=False,internal=True,parallel=True)
+                data=await asyncio.wait_for(response.get_data(),2)
+            self.assertEqual(data,b''.join(chunks))
+            self.assertEqual(sorted(calls),[(0,4),(1,3),(4,2)])
+            self.assertEqual(state['active'],0)
+
+    async def test_parallel_ranges_warm_shared_media_session_before_overlap(self):
+        stack,state,chunks=self.fixture(chunk_count=17)
+        starting=False
+        ready=False
+        collisions=[]
+        with stack:
+            worker=main.get_worker_client()
+            original=worker.stream_media
+            async def stream_media(message,offset=0,limit=0):
+                nonlocal starting,ready
+                if not ready:
+                    if starting:
+                        collisions.append(offset)
+                    starting=True
+                    await asyncio.sleep(.01)
+                    ready=True
+                async for chunk in original(message,offset,limit):
+                    yield chunk
+            with patch.object(worker,'stream_media',stream_media):
+                response=await main.transmit_file('code',range_allowed=False,internal=True,parallel=True)
+                self.assertEqual(await response.get_data(),b''.join(chunks))
+            self.assertEqual(collisions,[])
+            self.assertEqual(state['peak'],4)
