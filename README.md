@@ -160,6 +160,7 @@ See [GOOGLE_DRIVE.md](GOOGLE_DRIVE.md) for token setup, limits and hosting requi
 | --- | --- |
 | `/` | GateStream landing page |
 | `/api/activity` | Live aggregate transfer counters and anonymous progress rows |
+| `/index/archive/<token>/status` | ZIP preparation progress for its temporary link |
 | `/health`, `/ping` | `OK` when the web server is responding; `X-GateStream-Version` identifies the deployed release |
 | `/stream/<code>` | Browser player |
 | `/dl/<code>` | Download; add `?stream=1` for inline media |
@@ -203,26 +204,40 @@ Select individual checkboxes or **Select this page**, then press **Download
 selected** to receive up to 30 files in one ZIP. Selection applies to the current
 page; changing the page or filters resets it. The server checks every selected
 code against its section, so a public ZIP request cannot include private Link
-records. ZIP64 supports large files. Files stream sequentially into the ZIP with
-no whole-archive RAM buffer or temporary media copy. Since version 2.0.2, each
-ZIP source keeps a continuous Telegram stream open, using the same path as
-individual downloads, instead of opening a separate stream for every MiB.
-A read that stalls for 18 seconds is retried from the last completed chunk;
-retries stop after 12 consecutive failures. The earlier limited-stream cleanup
-fix remains in place for prefetch and optional playback chunk reads. Total
-throughput depends on Telegram, the host and the network. ZIPs are uncompressed
-and cannot be resumed; use individual Download buttons for resumable downloads.
-Selection now creates a temporary GET URL ending in `.zip`, with a filename,
-Content-Length and HEAD support. It works in an external download manager
-without copying browser cookies or POST data. Use one connection; ZIP ranges
-and resume are unavailable. The **Download ZIP** and **Copy download link**
-controls let you retry or hand off the URL. The link is valid for one hour;
-anyone holding it can download the selected files during that time. Changing
-the Link password also invalidates outstanding private ZIP links. Expiry is
-checked when starting a request; an active transfer can finish afterward.
+records. ZIP64 supports large files.
 
-If a source transfer fails, the ZIP stops; retry it or download files
-individually. Keep the download running until the ZIP finishes.
+Since version 2.0.3, selected files are prepared into one temporary, uncompressed
+ZIP before the download starts. The page shows queued/preparing progress and
+automatically starts the download when ready. Preparation uses continuous
+Telegram reads with stalled-read recovery; it does not keep whole files in RAM.
+The completed ZIP is immutable and served from disk, so clients can pause,
+resume, and use multiple simultaneous connections without rebuilding the ZIP or
+rereading earlier Telegram data. Preparation traffic is not counted as bytes
+sent to viewers; actual ZIP downloads are counted by the activity dashboard.
+Actual download speed still depends on the host, proxy and network.
+
+The **Download ZIP** and **Copy download link** controls provide a GET `.zip`
+URL that works without browser cookies or POST data. HEAD, byte ranges, 206
+responses, ETags and If-Range validators are supported. Suffix/open-ended ranges
+work, and invalid or multipart ranges receive 416. Download managers can use
+multiple connections (start with four). The archive is retained until its link
+expires, 24 hours after selection. Anyone holding the URL can download its
+selected files during that time. Changing the Link password invalidates private
+ZIP links, including subsequent range requests. Removing or changing a selected
+catalog record also prevents new requests.
+
+Preparation has a shared 8 GiB disk budget, configurable with
+`ZIP_CACHE_MAX_MB`; `ZIP_CACHE_DIR` optionally chooses its directory. One ZIP is
+prepared at a time to keep Telegram connections and memory bounded. Space is
+reserved for queued jobs, and requests exceeding the budget or available free
+disk fail with a clear message. Unexpired ZIPs are not evicted to make room;
+expired files and interrupted preparations are cleaned on subsequent selections.
+If capacity is full, select fewer files, wait for expiry, or increase the budget
+where disk space permits. A host rebuild can remove temporary storage; completed
+ZIPs can resume after a normal process restart when their files remain. If a ZIP
+is lost, its old link fails with 410 instead of silently generating different
+bytes under the same URL. Choose a fresh selection after a rebuild or failure.
+Old streaming ZIP links from earlier versions also need a new selection.
 
 The initial **Link** password is **`Siam`** (case-sensitive). If you previously
 changed it, that saved password is retained. The account whose Telegram ID
@@ -251,7 +266,7 @@ Telegram account. The Cloudflare Worker forwards POST forms only for catalog
 login, logout and selected downloads; redeploy it with this update.
 
 The `/backup` command exports media collections, including new section fields,
-not access settings, scan checkpoints, or temporary download tickets. When
+not access settings, scan checkpoints, or temporary download tickets and ZIP cache files. When
 migrating only that backup, set the Link password again and restart any scan;
 existing public records are reused. Moving the full database preserves settings
 and checkpoints.
