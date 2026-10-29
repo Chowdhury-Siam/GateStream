@@ -20,6 +20,13 @@ _MESSAGE_CACHE: OrderedDict[tuple, tuple[Message, float]] = OrderedDict()
 _CACHE_MAX_SIZE = 80
 _CACHE_TTL = 3600  # 1 hour
 
+async def get_media_chunk(client, message, offset):
+    """Drain the limited stream so Hydrogram releases its transmission slot."""
+    chunk = None
+    async for data in client.stream_media(message, offset=offset, limit=1):
+        chunk = data
+    return chunk
+
 def invalidate_message_cache(chat_id: int | str = None, message_id: int = None):
     """Evicts cached message(s) from memory across all worker clients immediately."""
     if chat_id is None and message_id is None:
