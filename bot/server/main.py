@@ -77,7 +77,7 @@ async def security_and_bot_check():
 # ==================== STREAM & DOWNLOAD ROUTES ====================
 
 @bp.route('/dl/<string:file_code>')
-async def transmit_file(file_code):
+async def transmit_file(file_code, range_allowed=True):
     # Lookup file record in MongoDB
     doc = await get_file(file_code)
     if not doc:
@@ -111,7 +111,7 @@ async def transmit_file(file_code):
         file_size = file_size or f_size
         mime_type = mime_type or m_type
 
-    range_header = request.headers.get('Range')
+    range_header = request.headers.get('Range') if range_allowed else None
     start = 0
     end = file_size - 1
     chunk_size = 1024 * 1024  # 1 MB
