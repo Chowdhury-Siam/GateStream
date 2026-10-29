@@ -11,7 +11,7 @@ from bot.clients import get_worker_client, TelegramBot, mark_worker_cooldown, wo
 from bot.config import Telegram, Server
 from bot.database import db
 from bot.database.files import get_file, add_bandwidth_bytes
-from bot.modules.telegram import get_message, get_file_properties, get_media_chunk, iter_media_chunks
+from bot.modules.telegram import get_message, get_file_properties, get_media_chunk, iter_media_chunks, iter_parallel_ranges
 from bot.modules.static import get_human_size
 from bot.modules.memory import flush_ram, check_memory_circuit_breaker
 from bot.modules.activity import activity
@@ -170,7 +170,7 @@ async def transmit_file(file_code, range_allowed=True, parallel=False, internal=
         curr_chunks_needed = chunks_needed
 
         # Proactively trigger detached background pre-fetch of both Head and Tail if opening chunk 0
-        if offset == 0:
+        if offset == 0 and not internal:
             if not is_chunk_cached(file_code, 0):
                 asyncio.create_task(prefetch_head_chunk(file_code, total_chunks, target_msg=file_msg, channel_id=channel_id, message_id=message_id))
             if total_chunks > 4 and not is_chunk_cached(file_code, total_chunks - 1):
@@ -215,7 +215,7 @@ async def transmit_file(file_code, range_allowed=True, parallel=False, internal=
         # 2. Dual-Engine Streaming Architecture
         # -------------------------------------------------------------------------
         # Mode A: Multi-Worker Concurrent Chunk Pipeliner
-        # Optional for video playback; ZIP sources use the continuous path below.
+        # Video playback uses chunk reads; ZIP sources use continuous 4 MiB ranges.
         # Keeps a bounded window of up to four chunk reads across the worker pool.
         # Overlaps Telegram request latency while emitting chunks in their original order.
         #
@@ -226,10 +226,85 @@ async def transmit_file(file_code, range_allowed=True, parallel=False, internal=
         # -------------------------------------------------------------------------
         end_chunk = curr_offset + curr_chunks_needed
 
-        if (is_streaming or parallel) and curr_chunks_needed > 1:
+        if parallel and curr_chunks_needed > 1:
+            warmed = set()
+            warm_locks = {}
+
+            async def range_stream(client, msg, first, count):
+                name = getattr(client, 'name', 'bot')
+                async with aclosing(iter_media_chunks(client, msg, first, count)) as stream:
+                    initial = None
+                    if name not in warmed:
+                        lock = getattr(client, 'media_sessions_lock', None) or warm_locks.setdefault(name, asyncio.Lock())
+                        async with lock:
+                            if name not in warmed:
+                                # Hydrogram publishes its media session before start/auth
+                                # finishes. Wait for one real chunk before concurrent reads.
+                                initial = await anext(stream, None)
+                                if initial is not None:
+                                    warmed.add(name)
+                    if initial is not None:
+                        yield initial
+                    async for chunk in stream:
+                        yield chunk
+
+            async def read_span(first, count):
+                received = retries = 0
+                while received < count and retries < 12:
+                    client = get_worker_client() or TelegramBot
+                    name = getattr(client, 'name', 'bot')
+                    try:
+                        msg = await get_message(channel_id, message_id, client=client, force_refresh=retries > 0)
+                        if not msg:
+                            raise IOError('Telegram message unavailable')
+                        async with aclosing(range_stream(client, msg, first + received, count - received)) as stream:
+                            async for chunk in stream:
+                                expected = min(chunk_size, file_size - (first + received) * chunk_size)
+                                if len(chunk) != expected:
+                                    raise IOError('Telegram chunk was incomplete')
+                                received += 1
+                                retries = 0
+                                yield chunk
+                        if received < count:
+                            raise IOError('Telegram range ended early')
+                    except (asyncio.CancelledError, GeneratorExit):
+                        raise
+                    except Exception as error:
+                        retries += 1
+                        cooldown = getattr(error, 'value', 30) if isinstance(error, FloodWait) else 15
+                        if type(error).__name__ in ('ChannelPrivate', 'ChatAdminRequired', 'UserNotParticipant'):
+                            cooldown = 600
+                        mark_worker_cooldown(name, cooldown)
+                        logger.warning('ZIP source range stalled at chunk %d (%s), retry %d/12.', first + received, type(error).__name__, retries)
+                        await asyncio.sleep(.5)
+                if received < count:
+                    raise IOError('Telegram range could not be completed')
+
+            try:
+                async with aclosing(iter_parallel_ranges(read_span, curr_offset, curr_chunks_needed)) as source:
+                    async for chunk in source:
+                        if is_head_or_tail(curr_offset, total_chunks):
+                            asyncio.create_task(put_cached_chunk(file_code, curr_offset, chunk, total_chunks))
+                        if bytes_streamed == 0:
+                            chunk = chunk[current_start % chunk_size:]
+                        chunk = chunk[:content_length - bytes_streamed]
+                        yield chunk
+                        bytes_streamed += len(chunk)
+                        curr_offset += 1
+                        if curr_offset % 20 == 0:
+                            check_memory_circuit_breaker()
+                        if bytes_streamed >= content_length:
+                            break
+            finally:
+                if bytes_streamed > 0 and not internal:
+                    await add_bandwidth_bytes(bytes_streamed)
+                check_memory_circuit_breaker()
+                flush_ram()
+
+        elif is_streaming and curr_chunks_needed > 1:
             # ZIP has one HTTP connection, so fetch its Telegram chunks concurrently
             # even when the primary bot is the only configured client.
-            PREFETCH_CONCURRENCY = 4 if parallel else min(4, max(1, len(worker_clients)))
+            PREFETCH_CONCURRENCY = min(4, max(1, len(worker_clients)))
             pending_tasks: dict[int, asyncio.Task] = {}
             next_to_schedule = curr_offset
 
