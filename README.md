@@ -121,7 +121,10 @@ Cloudflare guide for all settings and the deployment steps.
 | `/batch anime <start_link> <end_link>` | Index anime episodes |
 | `/batch series <start_link> <end_link>` | Index series episodes |
 | `/episodes <batch_code>` | List a batch's episodes |
-| `/index` | Open public Index and protected Link files |
+| `/index <last_post_link>` | Automatically scan a channel, resume progress and identify media categories |
+| `/index @channel` | Continue up to the latest post observed by the bot |
+| `/cancelindex` | Admin only: stop the current scan and retain progress |
+| `/catalog`, `/index` without arguments | Open public Index and protected Link files |
 | `/setpassword <new password>` | Owner only: change the shared Link password and invalidate existing sessions |
 | `/privacy` | Explain stored data and link access |
 | `/drive <url>` | Admin-only: download a direct file URL and upload it to Google Drive when enabled |
@@ -131,11 +134,12 @@ Administrator commands include `/stats`, `/workers`, `/log`, `/sync_duration`,
 and `/sh`. `/sh` executes host commands, so grant administrator access only to
 people you trust with the server.
 
-Example channel indexing:
+Automatic channel indexing: add the bot as an admin and send the latest post link. See [CHANNEL_INDEX.md](CHANNEL_INDEX.md) for setup, metadata credentials, resume and cancellation.
 
 ```text
-/link https://t.me/c/1234567890/42
-/batch anime https://t.me/c/1234567890/10 https://t.me/c/1234567890/25
+/index https://t.me/c/1234567890/5000
+/index @YourChannel
+/cancelindex
 ```
 
 ### Optional Google Drive settings
@@ -185,11 +189,12 @@ There are two tabs:
 
 | Tab | Files | Access |
 | --- | --- | --- |
-| **Index** (`/index`) | Indexed batches and all their episodes, including `/batch`, `/batch_anime` and `/batch_series` | Public; no password or Telegram login |
+| **Index** (`/index`) | Automatically scanned channel files plus existing indexed batches and episodes | Public; no password or Telegram login |
 | **Link** (`/index?section=link`) | Single-file links created by `/link`, its movie/anime/series aliases, and direct bot uploads | Shared password required |
 
-Existing records are classified automatically: batch records go to Index and
-single-file records go to Link. This keeps old `/link` files out of the public
+Existing records without a section flag keep their original rule: batches go
+to Index and single-file records go to Link. New `/index` scans create public
+records, while `/link` records stay private. This keeps old `/link` files out of the public
 listing. New records also store their section explicitly. Media category filters
 (Movies, Anime, Web series, Direct files), filename/batch-title search and
 pagination work within each tab, with 30 files per page.
@@ -201,8 +206,17 @@ code against its section, so a public ZIP request cannot include private Link
 records. ZIP64 supports large files. Files stream sequentially into the ZIP with
 no whole-archive RAM buffer or temporary media copy. ZIPs are uncompressed and
 cannot be resumed; for resumable downloads use the individual Download buttons.
-If a source transfer fails, the ZIP transfer stops; retry it or download the
-files individually. Keep the download running until the ZIP finishes.
+Selection now creates a temporary GET URL ending in `.zip`, with a filename,
+Content-Length and HEAD support. It works in an external download manager
+without copying browser cookies or POST data. Use one connection; ZIP ranges
+and resume are unavailable. The **Download ZIP** and **Copy download link**
+controls let you retry or hand off the URL. The link is valid for one hour;
+anyone holding it can download the selected files during that time. Changing
+the Link password also invalidates outstanding private ZIP links. Expiry is
+checked when starting a request; an active transfer can finish afterward.
+
+If a source transfer fails, the ZIP stops; retry it or download files
+individually. Keep the download running until the ZIP finishes.
 
 The initial **Link** password is **`Siam`** (case-sensitive). If you previously
 changed it, that saved password is retained. The account whose Telegram ID
@@ -231,8 +245,17 @@ Telegram account. The Cloudflare Worker forwards POST forms only for catalog
 login, logout and selected downloads; redeploy it with this update.
 
 The `/backup` command exports media collections, including new section fields,
-not access settings. When migrating only that backup, set the Link password
-again; moving the full database preserves it.
+not access settings, scan checkpoints, or temporary download tickets. When
+migrating only that backup, set the Link password again and restart any scan;
+existing public records are reused. Moving the full database preserves settings
+and checkpoints.
+
+## Automatic media categories
+
+AniList identifies anime without a key. Optional host Secrets `MAL_CLIENT_ID`
+and `OMDB_API_KEY` enable MyAnimeList fallback and OMDb movie/series matching,
+including IMDb IDs and available Rotten Tomatoes ratings. Unknown/conflicting
+results remain Direct files. See [CHANNEL_INDEX.md](CHANNEL_INDEX.md).
 
 ## Live activity dashboard
 
