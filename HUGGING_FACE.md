@@ -126,3 +126,11 @@ general file-transfer bot is permitted. Confirm permission with Hugging Face
 before enabling the feature. A paused/flagged Space still requires their review.
 See [GOOGLE_DRIVE.md](GOOGLE_DRIVE.md) for details. Never upload `token.pickle`
 to the Space repository; if approved, use the base64 host Secret described there.
+
+## Channel indexing and media classification
+
+Use `/index LAST_POST_LINK` to scan a channel automatically, with progress and
+resume. AniList needs no key. Optional Space Secrets `MAL_CLIENT_ID` and
+`OMDB_API_KEY` enable additional metadata providers; restart after setting them.
+See [CHANNEL_INDEX.md](CHANNEL_INDEX.md). Bulk downloads now hand off one-hour
+GET ZIP links to download managers; use a single connection for each ZIP.
