@@ -108,3 +108,82 @@ class ArchiveCacheTests(unittest.IsolatedAsyncioTestCase):
             await self.cache.start('b'*43, self.files, self.download, self.expiry)
         release.set()
         self.assertEqual((await self.finish('a'*43))['state'], 'ready')
+
+    async def test_live_ranges_start_before_completion_and_share_one_valid_zip(self):
+        import io
+        from zipfile import ZipFile
+        entered, release = asyncio.Event(), asyncio.Event()
+        async def download(code):
+            self.calls.append(code)
+            async def body():
+                yield b'ab'
+                entered.set()
+                await release.wait()
+                yield b'cd'
+            return Response(body(),headers={'Content-Length':'4'})
+        token = 'a'*43
+        total = archive_size(self.files)
+        await self.cache.start(token,self.files,download,self.expiry,progressive=True)
+        await asyncio.wait_for(entered.wait(),1)
+        async def read(start,stop,cache=None):
+            return b''.join([chunk async for chunk in (cache or self.cache).read(token,start,stop)])
+        self.assertEqual(await asyncio.wait_for(read(0,2),1),b'PK')
+        self.assertFalse(self.cache.jobs[token]['task'].done())
+        # Closing a prefix request must leave the shared builder running for others.
+        bounds=[(i,min(i+31,total)) for i in range(0,total,31)]
+        readers=[asyncio.create_task(read(start,stop)) for start,stop in bounds]
+        await asyncio.sleep(.01)
+        self.assertFalse(readers[-1].done())
+        release.set()
+        payload=b''.join(await asyncio.wait_for(asyncio.gather(*readers),1))
+        self.assertEqual((await self.finish(token))['state'],'ready')
+        self.assertEqual(payload,self.cache.path(token).read_bytes())
+        with ZipFile(io.BytesIO(payload)) as archive:
+            self.assertIsNone(archive.testzip())
+            self.assertEqual(archive.read('01-test.bin'),b'abcd')
+        self.assertEqual(self.calls,['one'])
+        restarted=ArchiveCache(self.directory.name,self.cache.max_bytes)
+        self.assertEqual(await read(13,total,restarted),payload[13:])
+
+    async def test_live_builds_bypass_preparation_queue_and_are_bounded(self):
+        entered,release=asyncio.Event(),asyncio.Event()
+        async def blocked(code):
+            entered.set()
+            await release.wait()
+            return await self.download(code)
+        await self.cache.start('p'*43,self.files,blocked,self.expiry)
+        await asyncio.wait_for(entered.wait(),1)
+        await self.cache.start('a'*43,self.files,self.download,self.expiry,progressive=True)
+        self.assertEqual((await self.finish('a'*43))['state'],'ready')
+        self.assertFalse(self.cache.jobs['p'*43]['task'].done())
+        await self.cache.start('b'*43,self.files,blocked,self.expiry,progressive=True)
+        await self.cache.start('c'*43,self.files,blocked,self.expiry,progressive=True)
+        with self.assertRaisesRegex(ValueError,'Live ZIP capacity'):
+            await self.cache.start('d'*43,self.files,blocked,self.expiry,progressive=True)
+        release.set()
+        await asyncio.wait_for(asyncio.gather(*(job['task'] for job in self.cache.jobs.values())),1)
+
+    async def test_failed_live_source_unblocks_waiting_ranges_and_removes_partial(self):
+        entered,release=asyncio.Event(),asyncio.Event()
+        async def download(code):
+            async def body():
+                yield b'ab'
+                entered.set()
+                await release.wait()
+                raise OSError('source disconnected')
+            return Response(body(),headers={'Content-Length':'4'})
+        token='a'*43
+        total=archive_size(self.files)
+        await self.cache.start(token,self.files,download,self.expiry,progressive=True)
+        await asyncio.wait_for(entered.wait(),1)
+        async def read_tail():
+            return b''.join([chunk async for chunk in self.cache.read(token,total-22,total)])
+        reader=asyncio.create_task(read_tail())
+        await asyncio.sleep(.01)
+        self.assertFalse(reader.done())
+        release.set()
+        self.assertEqual((await self.finish(token))['state'],'failed')
+        with self.assertRaisesRegex(RuntimeError,'preparation stopped'):
+            await asyncio.wait_for(reader,1)
+        self.assertFalse(list(Path(self.directory.name).glob('*.part')))
+        self.assertFalse(self.cache.path(token).exists())
