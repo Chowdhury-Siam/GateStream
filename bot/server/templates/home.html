@@ -116,7 +116,8 @@
         <span>Uptime: <strong id="server-uptime">—</strong></span>
       </div>
       <div class="transfer-list" id="transfer-list"><div class="empty-state">Loading current transfers…</div></div>
-      <p class="activity-footnote">Live updates every 2 seconds. Totals are since this server restarted. One media link may have multiple HTTP connections.</p>
+      <p class="activity-footnote">Live updates every 2 seconds. Cumulative totals are saved across restarts. One media link may have multiple HTTP connections.</p>
+      <p class="activity-footnote" id="activity-persistence" role="status">Loading saved totals…</p>
       <p class="activity-footnote" id="activity-updated">Private file names and URLs are not shown.</p>
       <noscript><p class="activity-footnote">Enable JavaScript to view live transfer statistics.</p></noscript>
     </section>
@@ -161,6 +162,12 @@
         text('transfer-failed', Object.values(phases).reduce((sum, phase) => sum + phase.failed, 0));
         text('transfer-incomplete', Object.values(phases).reduce((sum, phase) => sum + phase.incomplete, 0));
         text('server-uptime', duration(data.uptime_seconds));
+        const saved = data.persistence || {};
+        text('activity-persistence', saved.state === 'saved'
+          ? 'Totals are saved automatically. Active connections, speed and uptime describe this session.'
+          : saved.state === 'unavailable'
+            ? 'Totals could not be saved or restored. Showing available values; retrying automatically.'
+            : 'Loading saved totals…');
         const list = byId('transfer-list'); list.replaceChildren();
         for (const job of data.transfers) {
           const row = document.createElement('article'); row.className = 'transfer-row';
