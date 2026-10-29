@@ -134,3 +134,19 @@ resume. AniList needs no key. Optional Space Secrets `MAL_CLIENT_ID` and
 `OMDB_API_KEY` enable additional metadata providers; restart after setting them.
 See [CHANNEL_INDEX.md](CHANNEL_INDEX.md). Bulk downloads now hand off one-hour
 GET ZIP links to download managers; use a single connection for each ZIP.
+
+ZIP downloads now use a bounded four-chunk Telegram pipeline internally. Keep
+one connection in the external download manager; the server fetches source
+chunks concurrently. Restart the Space after uploading the updated server.
+Actual speed depends on Telegram, host resources and network conditions.
+
+## Dashboard totals after a restart
+
+Cumulative transfer totals are checkpointed in your external MongoDB database
+every five seconds and restored after the Space restarts or rebuilds. Keep the
+same `DATABASE_URL` and `DATABASE_NAME`. Current connections, speeds and uptime
+reset because they describe the new running process. No local persistent disk
+is required for these statistics. A hard kill can lose the most recent unsaved
+interval; database failures are reported on the dashboard. Earlier unsaved
+counts cannot be recovered, except existing media bytes in the legacy bandwidth
+record where available.
