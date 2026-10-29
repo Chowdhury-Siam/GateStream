@@ -101,60 +101,79 @@ class IndexRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn('type="password"', body)
         self.assertIn('section=link', body)
 
-    async def test_bulk_download_access_validation_and_zip_contents(self):
+    async def test_bulk_download_manager_can_get_and_head_without_browser_cookies(self):
         import io
+        from datetime import datetime, timedelta, timezone
         from zipfile import ZipFile
         from quart import Response
         from werkzeug.datastructures import MultiDict
         from bot.server import main
         from urllib.parse import urlencode
+        tickets = {}
+        async def insert(document): tickets[document['_id']] = document
+        async def find(query): return tickets.get(query['_id'])
+        storage = SimpleNamespace(insert_one=insert, find_one=find)
+        files = [dict(code='episode1', file_name='../same.mp4', file_size=4),
+                 dict(code='episode2', file_name='বাংলা.mp4', file_size=4)]
+        async def download(code, range_allowed=True):
+            self.assertFalse(range_allowed)
+            async def body():
+                yield b'ab'
+                yield b'cd'
+            return Response(body(), headers={'Content-Length': '4'})
         data = dict(files=[], total=0, page=1, pages=1)
         with patch.object(catalog, 'list_files', AsyncMock(return_value=data)):
             response = await self.client.get('/index', scheme='https')
         csrf = re.search(r'name="csrf" value="([^"]+)"', await response.get_data(as_text=True)).group(1)
         form = MultiDict([('csrf', csrf), ('section', 'index'), ('code', 'episode1'), ('code', 'episode2')])
-        async def post():
+        async def post(json=False):
             return await self.client.post('/index/download', data=urlencode(list(form.items(multi=True))),
-                headers={'Content-Type': 'application/x-www-form-urlencoded'}, scheme='https')
-        files = [dict(code='episode1', file_name='../same.mp4'), dict(code='episode2', file_name='../same.mp4')]
-
-        async def download(code):
-            async def body():
-                yield b'ab'
-                yield b'cd'
-            return Response(body(), headers={'Content-Length': '4'})
-
-        with patch.object(catalog, 'selected_files', AsyncMock(return_value=files)) as selected:
+                headers={'Content-Type':'application/x-www-form-urlencoded', 'Accept':'application/json' if json else 'text/html'}, scheme='https')
+        with patch.object(catalog.db, 'db', {'download_tickets': storage}), patch.object(catalog, 'selected_files', AsyncMock(return_value=files)) as selected:
             with patch.object(main, 'transmit_file', download):
                 response = await post()
+                self.assertEqual(response.status_code, 303)
+                link = response.headers['Location']
+                self.assertTrue(link.endswith('/GateStream-index.zip'))
+                manager = instance.test_client()  # No login or CSRF cookies in the external manager.
+                async with manager.request(link, method='HEAD', scheme='https') as head:
+                    await head.send(b'')
+                    await head.send_complete()
+                self.assertEqual(head.status_code, 200)
+                response = await manager.get(link, headers={'Range':'bytes=0-9'}, scheme='https')
+                payload = await response.get_data()
                 self.assertEqual(response.status_code, 200)
-                self.assertEqual(response.content_type, 'application/zip')
-                selected.assert_awaited_once_with(['episode1', 'episode2'], 'index')
-                with ZipFile(io.BytesIO(await response.get_data())) as archive:
-                    self.assertEqual(archive.namelist(), ['01-.._same.mp4', '02-.._same.mp4'])
-                    self.assertEqual([archive.read(name) for name in archive.namelist()], [b'abcd', b'abcd'])
-            form['section'] = 'link'
-            selected.reset_mock()
-            self.assertEqual((await post()).status_code, 401)
-            selected.assert_not_awaited()
+                self.assertEqual(int(head.headers['Content-Length']), len(payload))
+                self.assertEqual(response.headers['Accept-Ranges'], 'none')
+                with ZipFile(io.BytesIO(payload)) as archive:
+                    self.assertEqual(archive.namelist(), ['01-.._same.mp4', '02-বাংলা.mp4'])
+                    self.assertEqual([archive.read(n) for n in archive.namelist()], [b'abcd', b'abcd'])
+                response = await post(json=True)
+                self.assertEqual(response.status_code, 200)
+                self.assertTrue((await response.get_json())['url'].endswith('.zip'))
+                form['section'] = 'link'
+                selected.reset_mock()
+                self.assertEqual((await post()).status_code, 401)
+                selected.assert_not_awaited()
+                await self.login()
+                response = await post()
+                private_link = response.headers['Location']
+                self.assertEqual((await manager.get(private_link, scheme='https')).status_code, 200)
+                self.settings.return_value = index_access._record('New password')
+                self.assertEqual((await manager.get(private_link, scheme='https')).status_code, 410)
+                public_ticket = next(t for t in tickets.values() if t['section']=='index')
+                public_ticket['expires_at'] = datetime.now(timezone.utc)-timedelta(seconds=1)
+                self.assertEqual((await manager.get(link, scheme='https')).status_code, 410)
             form['section'] = 'index'
-            selected.return_value = []  # A private code cannot be smuggled into public selection.
+            selected.return_value = []
             self.assertEqual((await post()).status_code, 409)
-            form.setlist('code', ['x'] * 31 + [str(i) for i in range(31)])
+            form.setlist('code', [str(i) for i in range(31)])
             self.assertEqual((await post()).status_code, 400)
             form.setlist('code', ['../../bad'])
             self.assertEqual((await post()).status_code, 400)
             form.setlist('code', ['episode1'])
             form['csrf'] = 'wrong'
             self.assertEqual((await post()).status_code, 400)
-        await self.login()
-        form['csrf'] = await self.csrf()
-        form['section'] = 'link'
-        with patch.object(catalog, 'selected_files', AsyncMock(return_value=[files[0]])), patch.object(main, 'transmit_file', download):
-            response = await post()
-            self.assertEqual(response.status_code, 200)
-            with ZipFile(io.BytesIO(await response.get_data())) as archive:
-                self.assertEqual(archive.read(archive.namelist()[0]), b'abcd')
 
     async def test_login_cookie_catalog_render_filters_and_logout(self):
         response = await self.login()
