@@ -61,6 +61,12 @@ class MongoDatabase:
             if self.webseries is not None:
                 await self.webseries.create_index("episodes.code")
                 await self.webseries.create_index([("channel_id", 1), ("start_id", 1), ("end_id", 1)])
+            for collection in (self.movies, self.anime, self.webseries, self.direct_files):
+                if collection is not None:
+                    await collection.create_index([('channel_id', 1), ('message_id', 1), ('catalog_section', 1)])
+            if self.db is not None:
+                await self.db['download_tickets'].create_index('expires_at', expireAfterSeconds=0)
+                await self.db['index_channels'].create_index('latest_seen')
             logger.info("MongoDB database indexes ensured.")
         except Exception as e:
             logger.warning("Error creating MongoDB indexes: %s", e)
