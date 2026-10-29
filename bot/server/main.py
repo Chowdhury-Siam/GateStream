@@ -9,7 +9,7 @@ from bot.clients import get_worker_client, TelegramBot, mark_worker_cooldown, wo
 from bot.config import Telegram, Server
 from bot.database import db
 from bot.database.files import get_file, add_bandwidth_bytes
-from bot.modules.telegram import get_message, get_file_properties
+from bot.modules.telegram import get_message, get_file_properties, get_media_chunk
 from bot.modules.static import get_human_size
 from bot.modules.memory import flush_ram, check_memory_circuit_breaker
 from bot.modules.activity import activity
@@ -251,12 +251,7 @@ async def transmit_file(file_code, range_allowed=True, parallel=False):
                         if not msg:
                             continue
 
-                        async def _pull():
-                            async for c in worker.stream_media(msg, offset=target_idx, limit=1):
-                                return c
-                            return None
-
-                        chunk = await asyncio.wait_for(_pull(), timeout=18.0)
+                        chunk = await asyncio.wait_for(get_media_chunk(worker, msg, target_idx), timeout=18.0)
                         if chunk:
                             if is_head_or_tail(target_idx, total_chunks):
                                 asyncio.create_task(put_cached_chunk(file_code, target_idx, chunk, total_chunks))
@@ -279,11 +274,7 @@ async def transmit_file(file_code, range_allowed=True, parallel=False):
                 try:
                     fresh_msg = await get_message(channel_id, message_id, client=TelegramBot, force_refresh=True)
                     if fresh_msg:
-                        async def _pull_fb():
-                            async for c in TelegramBot.stream_media(fresh_msg, offset=target_idx, limit=1):
-                                return c
-                            return None
-                        return await asyncio.wait_for(_pull_fb(), timeout=18.0)
+                        return await asyncio.wait_for(get_media_chunk(TelegramBot, fresh_msg, target_idx), timeout=18.0)
                 except Exception as fb_err:
                     logger.error("Final TelegramBot fallback failed on chunk %d: %s", target_idx, fb_err)
 
