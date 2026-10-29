@@ -9,6 +9,7 @@ from bot.clients import (
 )
 from bot.server import server
 from bot.modules.memory import flush_ram, check_memory_circuit_breaker
+from bot.modules.activity_store import activity_store
 
 from logging import getLogger
 logger = getLogger('heartbeat')
@@ -52,7 +53,9 @@ async def main():
     heartbeat_task = TelegramBot.loop.create_task(keep_alive_heartbeat())
     await idle()
     heartbeat_task.cancel()
+    await activity_store.flush()
     await stop_all_clients()
+    await activity_store.flush()
 
 if __name__ == '__main__':
     TelegramBot.loop.run_until_complete(main())
