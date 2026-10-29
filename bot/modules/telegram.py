@@ -1,6 +1,7 @@
 import asyncio
 import time
 from collections import OrderedDict
+from contextlib import aclosing
 from hydrogram import Client
 from hydrogram.types import Message
 from datetime import datetime
@@ -19,6 +20,18 @@ except ImportError:
 _MESSAGE_CACHE: OrderedDict[tuple, tuple[Message, float]] = OrderedDict()
 _CACHE_MAX_SIZE = 80
 _CACHE_TTL = 3600  # 1 hour
+MEDIA_READ_TIMEOUT = 18.0
+
+
+async def iter_media_chunks(client, message, offset, limit):
+    """Keep one bounded stream open; fail stalled reads so the caller can retry."""
+    async with aclosing(client.stream_media(message, offset=offset, limit=limit)) as stream:
+        while True:
+            try:
+                chunk = await asyncio.wait_for(anext(stream), timeout=MEDIA_READ_TIMEOUT)
+            except StopAsyncIteration:
+                return
+            yield chunk
 
 async def get_media_chunk(client, message, offset):
     """Drain the limited stream so Hydrogram releases its transmission slot."""
