@@ -78,6 +78,38 @@ class BulkPipelineTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(state['peak'],1)
         self.assertEqual(state['calls'],[(0,0)])
 
+    async def test_zip_drains_limited_streams_before_reusing_telegram_slots(self):
+        stack,state,chunks=self.fixture()
+        slots=asyncio.Semaphore(2)
+        streams=[]
+        with stack:
+            worker=main.get_worker_client()
+            original=worker.stream_media
+
+            async def source(message, offset=0, limit=0):
+                async with slots:
+                    async for chunk in original(message,offset,limit):
+                        yield chunk
+
+            async def stream_media(message, offset=0, limit=0):
+                # Hydrogram wraps get_file(), which holds a transmission slot
+                # across yield. Retain it to avoid relying on garbage collection.
+                stream=source(message,offset,limit)
+                streams.append(stream)
+                async for chunk in stream:
+                    yield chunk
+
+            try:
+                with patch.object(worker,'stream_media',stream_media):
+                    async with instance.test_request_context('/index/archive/ticket/GateStream.zip'):
+                        response=await main.transmit_file('code',range_allowed=False,parallel=True)
+                        data=await asyncio.wait_for(response.get_data(),1)
+                self.assertEqual(data,b''.join(chunks))
+                self.assertEqual(slots._value,2)
+            finally:
+                for stream in streams:
+                    await stream.aclose()
+
     async def test_disconnect_cancels_and_drains_pending_chunk_reads(self):
         stack,state,chunks=self.fixture(block=True)
         with stack:
