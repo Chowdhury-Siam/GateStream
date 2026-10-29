@@ -135,13 +135,15 @@ resume. AniList needs no key. Optional Space Secrets `MAL_CLIENT_ID` and
 See [CHANNEL_INDEX.md](CHANNEL_INDEX.md). Bulk downloads now hand off one-hour
 GET ZIP links to download managers; use a single connection for each ZIP.
 
-ZIP downloads now use a bounded four-chunk Telegram pipeline internally. Keep
-one connection in the external download manager; the server fetches source
-chunks concurrently. Restart the Space after uploading the updated server.
-Actual speed depends on Telegram, host resources and network conditions. Version
-2.0.1 fixes Telegram download slots being retained by unfinished one-chunk
-streams, which could stall a ZIP shortly after it started. Upload the updated
-source and restart the Space, then generate a fresh ZIP link to retest.
+Version 2.0.2 uses a continuous Telegram source stream for each ZIP entry,
+matching the individual-download path. Stalled source reads time out after
+18 seconds and retry at the next undelivered chunk, without repeating earlier
+bytes. Keep one connection per ZIP in the download manager; ZIP ranges and
+resume are unavailable. Actual speed depends on Telegram, host resources and
+network conditions. Upload the updated source, restart the Space and generate
+a fresh ZIP link. The `/health` response header `X-GateStream-Version` should
+report `2.0.2`. A complete real-host transfer is still needed to verify whether
+this resolves the observed host/network stall.
 
 ## Dashboard totals after a restart
 
