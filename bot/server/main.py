@@ -77,7 +77,7 @@ async def security_and_bot_check():
 # ==================== STREAM & DOWNLOAD ROUTES ====================
 
 @bp.route('/dl/<string:file_code>')
-async def transmit_file(file_code, range_allowed=True):
+async def transmit_file(file_code, range_allowed=True, parallel=False):
     # Lookup file record in MongoDB
     doc = await get_file(file_code)
     if not doc:
@@ -214,10 +214,9 @@ async def transmit_file(file_code, range_allowed=True):
         # 2. Dual-Engine Streaming Architecture
         # -------------------------------------------------------------------------
         # Mode A: Multi-Worker Concurrent Chunk Pipeliner
-        # Activated for single-connection video playback (is_streaming=True, e.g. StreamHub / ExoPlayer).
-        # Pipelines 3-4 chunks in parallel across the worker pool into RAM (approx 4 MB buffer).
-        # Eliminates MTProto round-trip latency and bypasses Telegram's single-session speed limit,
-        # delivering 2.5 - 3.5+ MB/s over a single HTTP connection!
+        # Activated for video playback and internally requested ZIP source streams.
+        # Keeps a bounded window of up to four chunk reads across the worker pool.
+        # Overlaps Telegram request latency while emitting chunks in their original order.
         #
         # Mode B: Resilient Sequential Continuous Stream
         # Dedicated healthy worker streaming directly from MTProto.
@@ -226,8 +225,10 @@ async def transmit_file(file_code, range_allowed=True):
         # -------------------------------------------------------------------------
         end_chunk = curr_offset + curr_chunks_needed
 
-        if is_streaming and curr_chunks_needed > 1:
-            PREFETCH_CONCURRENCY = min(4, len(worker_clients))
+        if (is_streaming or parallel) and curr_chunks_needed > 1:
+            # ZIP has one HTTP connection, so fetch its Telegram chunks concurrently
+            # even when the primary bot is the only configured client.
+            PREFETCH_CONCURRENCY = 4 if parallel else min(4, max(1, len(worker_clients)))
             pending_tasks: dict[int, asyncio.Task] = {}
             next_to_schedule = curr_offset
 
@@ -344,6 +345,8 @@ async def transmit_file(file_code, range_allowed=True):
                 for t in pending_tasks.values():
                     if not t.done():
                         t.cancel()
+                if pending_tasks:
+                    await asyncio.gather(*pending_tasks.values(), return_exceptions=True)
                 pending_tasks.clear()
                 if bytes_streamed > 0:
                     await add_bandwidth_bytes(bytes_streamed)
