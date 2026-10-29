@@ -117,7 +117,7 @@ class IndexRouteTests(unittest.IsolatedAsyncioTestCase):
                  dict(code='episode2', file_name='বাংলা.mp4', file_size=4)]
         async def download(code, range_allowed=True, parallel=False):
             self.assertFalse(range_allowed)
-            self.assertTrue(parallel)
+            self.assertFalse(parallel)
             async def body():
                 yield b'ab'
                 yield b'cd'
