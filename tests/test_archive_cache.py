@@ -187,3 +187,24 @@ class ArchiveCacheTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.wait_for(reader,1)
         self.assertFalse(list(Path(self.directory.name).glob('*.part')))
         self.assertFalse(self.cache.path(token).exists())
+
+    async def test_live_fill_rate_tracks_progress_and_decays_when_source_stalls(self):
+        entered=asyncio.Event()
+        async def blocked(code):
+            entered.set()
+            await asyncio.Event().wait()
+        token='a'*43
+        await self.cache.start(token,self.files,blocked,self.expiry,progressive=True)
+        await asyncio.wait_for(entered.wait(),1)
+        job=self.cache.jobs[token]
+        job['bytes']=40
+        now=time.monotonic()
+        job['samples'].clear()
+        job['samples'].extend([(now-5,0),(now-1,40)])
+        status=self.cache.status(token,archive_size(self.files))
+        self.assertAlmostEqual(status['source_speed_bps'],8,delta=.1)
+        self.assertEqual(status['bytes'],40)
+        job['samples'].clear()
+        job['samples'].extend([(now-20,0),(now-10,40)])
+        self.assertEqual(self.cache.status(token,archive_size(self.files))['source_speed_bps'],0)
+        await self.cache.close()
