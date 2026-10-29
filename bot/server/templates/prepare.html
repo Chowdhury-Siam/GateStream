@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex,nofollow">
+  {% if state.state in ('queued', 'preparing') %}<meta http-equiv="refresh" content="2">{% endif %}
+  <title>Preparing ZIP · GateStream</title>
+  <style>
+    body { background:#10100e; color:#f4f0e7; font:16px/1.6 system-ui,sans-serif; margin:0; }
+    main { max-width:520px; margin:12vh auto; padding:24px; }
+    a { color:#d6ad60; } progress { width:100%; accent-color:#d6ad60; }
+    p { color:#aaa89f; }
+  </style>
+</head>
+<body><main>
+  {% if state.state in ('queued', 'preparing') %}
+  <h1>Preparing your ZIP.</h1>
+  <progress value="{{ state.bytes }}" max="{{ state.total }}" aria-label="ZIP preparation"></progress>
+  <p>{{ 'Waiting to start…' if state.state == 'queued' else 'Preparing… ' ~ (100 * state.bytes / state.total)|int ~ '%' }}</p>
+  <p>Your download will start when it is ready. You can then pause, resume, or use multiple connections.</p>
+  {% else %}
+  <h1>ZIP unavailable.</h1><p>Preparation failed or the temporary ZIP is no longer available. Select the files again to retry.</p>
+  {% endif %}
+  <a href="{{ url_for('catalog.index_page', section=section) }}">Back to files</a>
+</main></body>
+</html>
