@@ -1,3 +1,5 @@
+import aiohttp
+from bot.modules.metadata import Classifier
 from hydrogram import filters
 from hydrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 from bot.clients import TelegramBot
@@ -64,18 +66,8 @@ async def link_command(_, msg: Message):
             quote=True
         )
 
-    # 2. Auto-detect category from channel ID if not explicitly specified
-    if not target_category:
-        chan_str = str(channel_id)
-        if chan_str.endswith("2633457020") or chan_str == "-1002633457020":
-            target_category = 'anime'
-        elif chan_str.endswith("4440703680") or chan_str == "-1004440703680":
-            target_category = 'webseries'
-        else:
-            target_category = 'movies'
+    status_msg = await msg.reply('Fetching the channel message and identifying its media category…', quote=True)
 
-    status_msg = await msg.reply(f"⏳ *Fetching message from channel and indexing as {target_category.upper()}...*", quote=True)
-    
     try:
         target_msg = await get_message(channel_id, message_id, force_refresh=True)
         if not target_msg or not is_media_message(target_msg):
@@ -83,6 +75,14 @@ async def link_command(_, msg: Message):
 
         file_name, file_size, mime_type, duration, duration_formatted = get_file_properties(target_msg)
         numeric_chat_id = target_msg.chat.id if target_msg.chat else channel_id
+        metadata = None
+        if not target_category:
+            if mime_type.startswith('video/') or file_name.lower().endswith(('.mp4', '.mkv', '.webm', '.avi', '.mov', '.ts')):
+                async with aiohttp.ClientSession() as session:
+                    metadata = await Classifier(session).classify(file_name)
+                target_category = metadata['category']
+            else:
+                target_category = 'direct_files'
         
         # Save permanently to target collection
         doc = await save_file(
@@ -94,7 +94,8 @@ async def link_command(_, msg: Message):
             user_id=msg.from_user.id,
             category=target_category,
             duration=duration,
-            duration_formatted=duration_formatted
+            duration_formatted=duration_formatted,
+            metadata=metadata
         )
         
         code = doc['code']
