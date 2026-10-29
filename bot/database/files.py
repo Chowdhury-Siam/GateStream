@@ -17,15 +17,17 @@ async def save_file(
     category: str = 'movies',
     title: str = None,
     duration: int = 0,
-    duration_formatted: str = "N/A"
+    duration_formatted: str = "N/A",
+    metadata: dict = None
 ) -> dict:
     """Saves a single movie or direct file."""
     collection = db.get_collection(category)
     
-    # Check if this exact channel message is already indexed
+    # Link records remain separate from public records of the same channel post.
     existing = await collection.find_one({
         'channel_id': channel_id,
-        'message_id': message_id
+        'message_id': message_id,
+        'catalog_section': {'$ne': 'index'}
     })
     if existing:
         # Auto-detect if file in channel post was replaced or modified
@@ -70,6 +72,8 @@ async def save_file(
         'created_at': datetime.utcnow()
     }
     
+    if metadata:
+        doc['metadata'] = metadata
     await collection.insert_one(doc)
     return doc
 
@@ -141,7 +145,7 @@ async def get_file(code: str, category_hint: str = None) -> dict | None:
                 return doc
 
     # 2. Search inside batch documents (anime, webseries)
-    for col in (db.anime, db.webseries):
+    for col in (db.movies, db.anime, db.webseries):
         if col is not None:
             batch_doc = await col.find_one({'episodes.code': code})
             if batch_doc:
@@ -182,7 +186,7 @@ async def delete_file(code: str) -> bool:
                 return True
 
     # Pull single episode from batch if it was part of an episodes array
-    for col in (db.anime, db.webseries):
+    for col in (db.movies, db.anime, db.webseries):
         if col is not None:
             res = await col.update_one(
                 {'episodes.code': code},
