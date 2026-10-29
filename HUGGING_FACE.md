@@ -138,7 +138,10 @@ GET ZIP links to download managers; use a single connection for each ZIP.
 ZIP downloads now use a bounded four-chunk Telegram pipeline internally. Keep
 one connection in the external download manager; the server fetches source
 chunks concurrently. Restart the Space after uploading the updated server.
-Actual speed depends on Telegram, host resources and network conditions.
+Actual speed depends on Telegram, host resources and network conditions. Version
+2.0.1 fixes Telegram download slots being retained by unfinished one-chunk
+streams, which could stall a ZIP shortly after it started. Upload the updated
+source and restart the Space, then generate a fresh ZIP link to retest.
 
 ## Dashboard totals after a restart
 
