@@ -23,6 +23,11 @@
     input[type="checkbox"] { width:19px; height:19px; padding:0; accent-color:#d6ad60; flex-shrink:0; }
     button:disabled { opacity:.45; cursor:default; }
     .bulk .muted { flex-basis:100%; }
+    .zip-modes { flex-basis:100%; margin:0; padding:12px; border:1px solid #494437; border-radius:8px; }
+    .zip-modes legend { padding:0 6px; font-size:12px; color:#c9c5b9; }
+    .zip-modes label { display:flex; align-items:flex-start; gap:10px; margin:6px 0; font-size:13px; }
+    .zip-modes input { width:18px; height:18px; flex-shrink:0; accent-color:#d6ad60; margin:3px 0 0; padding:0; }
+    .zip-modes small { display:block; color:#918e83; font-size:12px; }
     .file-title { display:flex; align-items:flex-start; gap:12px; }
     .file-title .pick { padding-top:3px; }
     .brand svg { width: 42px; height: 42px; }
@@ -107,11 +112,15 @@
       <input type="hidden" name="section" value="{{ section }}">
       {% if files %}<div class="bulk">
         <label><input id="select-all" type="checkbox"> Select this page</label>
+        <fieldset id="zip-mode" class="zip-modes"><legend>ZIP download</legend>
+          <label><input type="radio" name="mode" value="stream" checked><span>Start immediately<small>Resume and multiple connections. Later sections may wait while the ZIP is built.</small></span></label>
+          <label><input type="radio" name="mode" value="prepare"><span>Prepare with resume<small>Wait for preparation, then pause/resume or use multiple connections.</small></span></label>
+        </fieldset>
         <button id="download-selected" type="submit" disabled>Download selected (0)</button>
         <span id="selection-count" role="status" aria-live="polite">0 selected</span>
         <span class="muted">Download up to {{ page_size }} selected files together as one ZIP. Selection applies to this page.</span>
       </div>{% endif %}
-    <div id="zip-ready" class="bulk" hidden><a id="zip-url" class="button" download>Download ZIP</a><button id="copy-zip" class="ghost" type="button">Copy download link</button><span class="muted">Valid for 24 hours while available. Pause, resume, and multiple connections are supported.</span></div>
+    <div id="zip-ready" class="bulk" hidden><a id="zip-url" class="button" download>Download ZIP</a><button id="copy-zip" class="ghost" type="button">Copy download link</button><span id="zip-note" class="muted"></span></div>
     <section class="files" aria-label="Indexed files">
       {% for item in files %}
       <article class="file"><div class="file-title"><label class="pick"><input class="file-select" type="checkbox" name="code" value="{{ item.code }}" aria-label="Select {{ item.file_name or 'Untitled file' }}"></label><div><h2>{{ item.file_name or 'Untitled file' }}</h2><div class="meta"><span class="category">{{ {'movies':'Movie','anime':'Anime','webseries':'Web series','direct_files':'Direct file'}.get(item.category, item.category) }}</span><span>{{ get_human_size(item.file_size) }}</span>{% if item.metadata_source %}<span>Matched via {{ item.metadata_source }}</span>{% elif item.metadata_status == 'unmatched' %}<span>Needs classification</span>{% endif %}{% if item.duration_formatted and item.duration_formatted != 'N/A' %}<span>{{ item.duration_formatted }}</span>{% endif %}</div>{% if item.batch_title %}<p>{{ item.batch_title }}</p>{% endif %}</div></div>
@@ -121,7 +130,7 @@
     </section>
     </form>
     <div class="pager">{% if page > 1 %}<a href="{{ url_for('catalog.index_page', page=page-1, q=query, category=category, section=section) }}">← Previous</a>{% else %}<span>First page</span>{% endif %}{% if page < pages %}<a href="{{ url_for('catalog.index_page', page=page+1, q=query, category=category, section=section) }}">Next →</a>{% else %}<span>End of results</span>{% endif %}</div>
-    <footer>GateStream · Public Index · Protected Link · Resumable ZIP downloads.</footer>
+    <footer>GateStream · Public Index · Protected Link · Immediate or resumable ZIP downloads.</footer>
     {% endif %}
   </main>
   {% if unlocked %}<script>
@@ -148,20 +157,20 @@
       event.preventDefault();
       if (preparing) return;
       if (!choices.some(input => input.checked)) return;
+      const form = event.currentTarget;
+      const data = new FormData(form);
       preparing = true;
       download.disabled = true;
       choices.forEach(input => { input.disabled = true; });
       all.disabled = true;
+      document.getElementById('zip-mode').disabled = true;
       const status = document.getElementById('selection-count');
-      status.textContent = 'Preparing download link…';
+      status.textContent = data.get('mode') === 'stream' ? 'Starting ZIP download…' : 'Preparing download link…';
       try {
-        const form = event.currentTarget;
-        const data = new FormData(form);
-        choices.filter(input => input.checked).forEach(input => data.append('code', input.value));
         const response = await fetch(form.action, {method:'POST', body:data, headers:{Accept:'application/json'}});
         if (!response.ok) throw new Error(response.status === 413 ? await response.text() : 'Unable to prepare the download. Reload, sign in if needed, and try again.');
         const result = await response.json();
-        while (true) {
+        while (result.mode !== 'stream') {
           const check = await fetch(result.status_url, {cache:'no-store'});
           if (!check.ok) throw new Error('ZIP preparation failed or the link expired. Select the files again to retry.');
           const progress = await check.json();
@@ -172,7 +181,9 @@
         const link = document.getElementById('zip-url');
         link.href = result.url;
         document.getElementById('zip-ready').hidden = false;
-        status.textContent = 'ZIP ready. Resume and multiple connections supported. Link valid for 24 hours.';
+        const note = result.mode === 'stream' ? 'Live ZIP. Resume and multiple connections supported. Later sections may wait for Telegram.' : 'Prepared ZIP. Resume and multiple connections supported while available.';
+        document.getElementById('zip-note').textContent = `${note} Link valid for 24 hours.`;
+        status.textContent = result.mode === 'stream' ? 'ZIP download starting. Use Download ZIP to retry.' : 'ZIP ready. Resume and multiple connections supported.';
         link.click();
       } catch (error) {
         status.textContent = error.message;
@@ -180,6 +191,7 @@
         preparing = false;
         choices.forEach(input => { input.disabled = false; });
         all.disabled = false;
+        document.getElementById('zip-mode').disabled = false;
         download.disabled = false;
       }
     });
