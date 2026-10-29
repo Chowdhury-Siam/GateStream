@@ -160,7 +160,7 @@ See [GOOGLE_DRIVE.md](GOOGLE_DRIVE.md) for token setup, limits and hosting requi
 | --- | --- |
 | `/` | GateStream landing page |
 | `/api/activity` | Live aggregate transfer counters and anonymous progress rows |
-| `/health`, `/ping` | `OK` when the web server is responding |
+| `/health`, `/ping` | `OK` when the web server is responding; `X-GateStream-Version` identifies the deployed release |
 | `/stream/<code>` | Browser player |
 | `/dl/<code>` | Download; add `?stream=1` for inline media |
 | `/api/file/<code>` | File details and links |
@@ -204,14 +204,14 @@ selected** to receive up to 30 files in one ZIP. Selection applies to the curren
 page; changing the page or filters resets it. The server checks every selected
 code against its section, so a public ZIP request cannot include private Link
 records. ZIP64 supports large files. Files stream sequentially into the ZIP with
-no whole-archive RAM buffer or temporary media copy. Each active ZIP source
-uses up to four concurrent Telegram chunk reads, including with a single bot,
-and emits them in order. Version 2.0.1 fully drains each limited Telegram
-stream before returning its chunk, releasing the underlying download slot. This
-fixes a slot leak that could stall ZIPs after the first few MiB; head/tail
-prefetch uses the same fix. This overlaps request latency; total throughput
-still depends on Telegram, the host and the network. ZIPs are uncompressed and
-cannot be resumed; for resumable downloads use the individual Download buttons.
+no whole-archive RAM buffer or temporary media copy. Since version 2.0.2, each
+ZIP source keeps a continuous Telegram stream open, using the same path as
+individual downloads, instead of opening a separate stream for every MiB.
+A read that stalls for 18 seconds is retried from the last completed chunk;
+retries stop after 12 consecutive failures. The earlier limited-stream cleanup
+fix remains in place for prefetch and optional playback chunk reads. Total
+throughput depends on Telegram, the host and the network. ZIPs are uncompressed
+and cannot be resumed; use individual Download buttons for resumable downloads.
 Selection now creates a temporary GET URL ending in `.zip`, with a filename,
 Content-Length and HEAD support. It works in an external download manager
 without copying browser cookies or POST data. Use one connection; ZIP ranges
