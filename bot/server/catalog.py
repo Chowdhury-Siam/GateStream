@@ -194,7 +194,7 @@ async def download_selected():
         from .main import transmit_file
 
         async def download(code):
-            return await transmit_file(code, range_allowed=False, internal=True)
+            return await transmit_file(code, range_allowed=False, internal=True, parallel=True)
 
         await archive_cache.start(token, ticket['files'], download, ticket['expires_at'].timestamp(), progressive=mode == 'stream')
     except ValueError as error:
