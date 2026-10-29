@@ -1,13 +1,16 @@
 import hmac
+import hashlib
+from datetime import datetime, timedelta, timezone
 import logging
 import re
 import secrets
 import time
 from collections import deque
 
-from quart import Blueprint, Response, make_response, redirect, render_template, request, stream_with_context, url_for
+from quart import Blueprint, Response, make_response, redirect, render_template, request, stream_with_context, url_for, jsonify
 
 from bot.config import Server
+from bot.database import db
 from bot.database.catalog import CATEGORIES, PAGE_SIZE, list_files, selected_files
 from bot.modules import index_access
 from bot.modules.static import get_human_size
@@ -156,8 +159,6 @@ async def download_selected():
     codes = list(dict.fromkeys(form.getlist('code')))
     if not 1 <= len(codes) <= PAGE_SIZE or any(not re.fullmatch(r'[A-Za-z0-9_-]{1,128}', code) for code in codes):
         return _private(await make_response(f'Select between 1 and {PAGE_SIZE} files on this page.', 400))
-    if request.headers.get('Range'):
-        return _private(await make_response('ZIP downloads cannot be resumed. Start a new download.', 400))
     try:
         files = await selected_files(codes, section)
     except Exception as error:
@@ -165,21 +166,74 @@ async def download_selected():
         return _private(await make_response('The catalog is temporarily unavailable. Please try again.', 503))
     if len(files) != len(codes):
         return _private(await make_response('Some selected files are no longer in this category. Reload and select again.', 409))
-    from bot.modules.archive import stream_archive
+    try:
+        token = secrets.token_urlsafe(32)
+        ticket = dict(_id=token, codes=codes, section=section,
+            expires_at=datetime.now(timezone.utc) + timedelta(hours=1))
+        if section == 'link':
+            settings = await index_access.settings()
+            ticket['revision'] = hashlib.sha256(settings['session_secret'].encode()).hexdigest()
+        await db.db['download_tickets'].insert_one(ticket)
+    except Exception as error:
+        logger.error('ZIP link creation failed (%s).', type(error).__name__)
+        return _private(await make_response('Unable to create the download link. Please try again.', 503))
+    link = url_for('catalog.download_archive', token=token, filename=f'GateStream-{section}.zip')
+    if request.accept_mimetypes.best == 'application/json':
+        return _private(jsonify(url=link))
+    return _private(redirect(link, code=303))
+
+
+@bp.route('/index/archive/<string:token>/<string:filename>')
+async def download_archive(token, filename):
+    if not re.fullmatch(r'[A-Za-z0-9_-]{43}', token):
+        return _private(await make_response('Download link not found.', 404))
+    try:
+        ticket = await db.db['download_tickets'].find_one({'_id': token})
+        if not ticket:
+            return _private(await make_response('Download link expired. Select the files again.', 410))
+        expiry = ticket['expires_at'].replace(tzinfo=timezone.utc)
+        if datetime.now(timezone.utc) >= expiry:
+            return _private(await make_response('Download link expired. Select the files again.', 410))
+        if ticket['section'] == 'link':
+            settings = await index_access.settings()
+            revision = hashlib.sha256(settings['session_secret'].encode()).hexdigest()
+            if not hmac.compare_digest(ticket.get('revision', ''), revision):
+                return _private(await make_response('The password changed. Select the files again.', 410))
+        files = await selected_files(ticket['codes'], ticket['section'])
+    except Exception as error:
+        logger.error('ZIP link lookup failed (%s).', type(error).__name__)
+        return _private(await make_response('The download is temporarily unavailable. Please try again.', 503))
+    if len(files) != len(ticket['codes']):
+        return _private(await make_response('A selected file was removed. Select the files again.', 409))
+    from bot.modules.archive import stream_archive, archive_size
     from .main import transmit_file
+
+    async def download(code):
+        return await transmit_file(code, range_allowed=False)
 
     @stream_with_context
     async def archive():
         try:
-            async for chunk in stream_archive(files, transmit_file):
+            async for chunk in stream_archive(files, download):
                 yield chunk
         except Exception as error:
             logger.error('ZIP transfer interrupted (%s).', type(error).__name__)
             raise
 
-    response = Response(archive(), content_type='application/zip', headers={
-        'Content-Disposition': f'attachment; filename="GateStream-{section}.zip"',
+    try:
+        length = archive_size(files)
+    except (ValueError, KeyError, TypeError):
+        return _private(await make_response('File sizes are unavailable. Please index these files again.', 409))
+    response = Response(None if request.method == 'HEAD' else archive(), content_type='application/zip')
+    response.automatically_set_content_length = False
+    response.headers.update({
+        'Content-Disposition': f'attachment; filename="GateStream-{ticket["section"]}.zip"',
+        'Content-Length': str(length),
+        'Accept-Ranges': 'none',
         'X-Content-Type-Options': 'nosniff',
+        'Referrer-Policy': 'no-referrer',
     })
     response.timeout = None
-    return _private(response)
+    response = _private(response)
+    response.headers['Referrer-Policy'] = 'no-referrer'
+    return response
