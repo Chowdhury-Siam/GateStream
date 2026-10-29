@@ -17,6 +17,7 @@
     .tabs { display:flex; justify-content:flex-start; gap:10px; margin-top:32px; }
     .tab { padding:10px 24px; border:1px solid #494437; border-radius:8px; text-decoration:none; }
     .tab[aria-current="page"] { background:#d6ad60; color:#17130d; border-color:#d6ad60; font-weight:650; }
+    [hidden] { display:none !important; }
     .bulk { display:flex; align-items:center; flex-wrap:wrap; gap:12px; margin:18px 0; padding:14px; border:1px solid #494437; border-radius:10px; }
     .bulk label, .pick { display:inline-flex; align-items:center; gap:8px; margin:0; cursor:pointer; }
     input[type="checkbox"] { width:19px; height:19px; padding:0; accent-color:#d6ad60; flex-shrink:0; }
@@ -110,9 +111,10 @@
         <span id="selection-count" role="status" aria-live="polite">0 selected</span>
         <span class="muted">Download up to {{ page_size }} selected files together as one ZIP. Selection applies to this page.</span>
       </div>{% endif %}
+    <div id="zip-ready" class="bulk" hidden><a id="zip-url" class="button" download>Download ZIP</a><button id="copy-zip" class="ghost" type="button">Copy download link</button><span class="muted">Valid for one hour. Open this link in your browser or download manager. Use one connection; ZIP resume is unavailable.</span></div>
     <section class="files" aria-label="Indexed files">
       {% for item in files %}
-      <article class="file"><div class="file-title"><label class="pick"><input class="file-select" type="checkbox" name="code" value="{{ item.code }}" aria-label="Select {{ item.file_name or 'Untitled file' }}"></label><div><h2>{{ item.file_name or 'Untitled file' }}</h2><div class="meta"><span class="category">{{ {'movies':'Movie','anime':'Anime','webseries':'Web series','direct_files':'Direct file'}.get(item.category, item.category) }}</span><span>{{ get_human_size(item.file_size) }}</span>{% if item.duration_formatted and item.duration_formatted != 'N/A' %}<span>{{ item.duration_formatted }}</span>{% endif %}</div>{% if item.batch_title %}<p>{{ item.batch_title }}</p>{% endif %}</div></div>
+      <article class="file"><div class="file-title"><label class="pick"><input class="file-select" type="checkbox" name="code" value="{{ item.code }}" aria-label="Select {{ item.file_name or 'Untitled file' }}"></label><div><h2>{{ item.file_name or 'Untitled file' }}</h2><div class="meta"><span class="category">{{ {'movies':'Movie','anime':'Anime','webseries':'Web series','direct_files':'Direct file'}.get(item.category, item.category) }}</span><span>{{ get_human_size(item.file_size) }}</span>{% if item.metadata_source %}<span>Matched via {{ item.metadata_source }}</span>{% elif item.metadata_status == 'unmatched' %}<span>Needs classification</span>{% endif %}{% if item.duration_formatted and item.duration_formatted != 'N/A' %}<span>{{ item.duration_formatted }}</span>{% endif %}</div>{% if item.batch_title %}<p>{{ item.batch_title }}</p>{% endif %}</div></div>
         <div class="file-actions">{% if (item.file_name or '').lower().endswith(('.mp4', '.mkv', '.webm', '.mov', '.m4v', '.avi', '.ts')) %}<a href="{{ url_for('main.stream_file', file_code=item.code) }}">Watch</a>{% endif %}<a class="button" href="{{ url_for('main.transmit_file', file_code=item.code) }}" download>Download ↓</a></div>
       </article>
       {% else %}<div class="empty">{% if query or category != 'all' %}No files match these filters. Try another search.{% else %}No media has been indexed yet. Add files through the Telegram bot.{% endif %}</div>{% endfor %}
@@ -128,6 +130,7 @@
     const download = document.getElementById('download-selected');
     function updateSelection() {
       if (!all) return;
+      document.getElementById('zip-ready').hidden = true;
       const count = choices.filter(input => input.checked).length;
       all.checked = count === choices.length;
       all.indeterminate = count > 0 && count < choices.length;
@@ -140,8 +143,32 @@
       updateSelection();
     });
     choices.forEach(input => input.addEventListener('change', updateSelection));
-    document.getElementById('selection').addEventListener('submit', event => {
-      if (!choices.some(input => input.checked)) event.preventDefault();
+    document.getElementById('selection').addEventListener('submit', async event => {
+      event.preventDefault();
+      if (!choices.some(input => input.checked)) return;
+      download.disabled = true;
+      const status = document.getElementById('selection-count');
+      status.textContent = 'Preparing download link…';
+      try {
+        const form = event.currentTarget;
+        const response = await fetch(form.action, {method:'POST', body:new FormData(form), headers:{Accept:'application/json'}});
+        if (!response.ok) throw new Error('Unable to prepare the download. Reload, sign in if needed, and try again.');
+        const result = await response.json();
+        const link = document.getElementById('zip-url');
+        link.href = result.url;
+        document.getElementById('zip-ready').hidden = false;
+        status.textContent = 'ZIP link ready. Your download will start; use Download ZIP to retry.';
+        link.click();
+      } catch (error) {
+        status.textContent = error.message;
+      } finally {
+        download.disabled = false;
+      }
+    });
+    document.getElementById('copy-zip')?.addEventListener('click', async () => {
+      const link = document.getElementById('zip-url');
+      try { await navigator.clipboard.writeText(link.href); document.getElementById('selection-count').textContent = 'Download link copied.'; }
+      catch { document.getElementById('selection-count').textContent = 'Long-press Download ZIP and copy its link.'; }
     });
     window.addEventListener('pageshow', updateSelection);
     updateSelection();
