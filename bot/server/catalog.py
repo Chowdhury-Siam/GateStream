@@ -7,18 +7,31 @@ import secrets
 import time
 from collections import deque
 
-from quart import Blueprint, Response, make_response, redirect, render_template, request, stream_with_context, url_for, jsonify
+from quart import Blueprint, Response, make_response, redirect, render_template, request, url_for, jsonify, send_file
+from werkzeug.sansio.http import is_resource_modified
 
 from bot.config import Server
 from bot.database import db
 from bot.database.catalog import CATEGORIES, PAGE_SIZE, list_files, selected_files
 from bot.modules import index_access
 from bot.modules.static import get_human_size
+from bot.modules.archive import archive_size
+from bot.modules.archive_cache import archive_cache, ARCHIVE_AGE
+from bot.modules.activity import activity
+from .error import abort
 
 bp = Blueprint('catalog', __name__)
 CSRF_COOKIE = 'gatestream_index_csrf'
 _attempts = {}
 logger = logging.getLogger('server')
+
+
+@bp.after_request
+async def archive_headers(response):
+    if request.path.startswith(('/index/archive/', '/index/prepare/')):
+        _private(response)
+        response.headers['Referrer-Policy'] = 'no-referrer'
+    return response
 
 
 def _secure():
@@ -168,72 +181,116 @@ async def download_selected():
         return _private(await make_response('Some selected files are no longer in this category. Reload and select again.', 409))
     try:
         token = secrets.token_urlsafe(32)
-        ticket = dict(_id=token, codes=codes, section=section,
-            expires_at=datetime.now(timezone.utc) + timedelta(hours=1))
+        ticket = dict(_id=token, codes=codes, section=section, archive_version=2,
+            files=[{key: item[key] for key in ('code', 'file_name', 'file_size')} for item in files],
+            expires_at=datetime.now(timezone.utc) + timedelta(seconds=ARCHIVE_AGE))
         if section == 'link':
             settings = await index_access.settings()
             ticket['revision'] = hashlib.sha256(settings['session_secret'].encode()).hexdigest()
         await db.db['download_tickets'].insert_one(ticket)
+        from .main import transmit_file
+
+        async def download(code):
+            return await transmit_file(code, range_allowed=False, internal=True)
+
+        await archive_cache.start(token, ticket['files'], download, ticket['expires_at'].timestamp())
+    except ValueError as error:
+        return _private(await make_response(str(error), 413))
     except Exception as error:
         logger.error('ZIP link creation failed (%s).', type(error).__name__)
         return _private(await make_response('Unable to create the download link. Please try again.', 503))
     link = url_for('catalog.download_archive', token=token, filename=f'GateStream-{section}.zip')
     if request.accept_mimetypes.best == 'application/json':
-        return _private(jsonify(url=link))
-    return _private(redirect(link, code=303))
+        return _private(jsonify(url=link, status_url=url_for('catalog.archive_status', token=token)))
+    return _private(redirect(url_for('catalog.prepare_archive', token=token), code=303))
+
+
+async def _archive_ticket(token):
+    if not re.fullmatch(r'[A-Za-z0-9_-]{43}', token):
+        abort(404, 'Download link not found.')
+    try:
+        ticket = await db.db['download_tickets'].find_one({'_id': token})
+        revoked = False
+        if ticket and ticket['section'] == 'link':
+            settings = await index_access.settings()
+            revision = hashlib.sha256(settings['session_secret'].encode()).hexdigest()
+            revoked = not hmac.compare_digest(ticket.get('revision', ''), revision)
+    except Exception as error:
+        logger.error('ZIP link lookup failed (%s).', type(error).__name__)
+        abort(503, 'The download is temporarily unavailable. Please try again.')
+    if not ticket or datetime.now(timezone.utc) >= ticket['expires_at'].replace(tzinfo=timezone.utc):
+        abort(410, 'Download link expired. Select the files again.')
+    if revoked:
+        abort(410, 'The password changed. Select the files again.')
+    if ticket.get('archive_version') != 2:
+        abort(410, 'Create a new selection to use resumable ZIP downloads.')
+    return ticket
+
+
+@bp.route('/index/archive/<string:token>/status')
+async def archive_status(token):
+    ticket = await _archive_ticket(token)
+    state = archive_cache.status(token, archive_size(ticket['files']))
+    return jsonify(state), 200 if state['state'] == 'ready' else 202 if state['state'] in ('queued', 'preparing') else 410
+
+
+@bp.route('/index/prepare/<string:token>')
+async def prepare_archive(token):
+    ticket = await _archive_ticket(token)
+    state = archive_cache.status(token, archive_size(ticket['files']))
+    link = url_for('catalog.download_archive', token=token, filename=f'GateStream-{ticket["section"]}.zip')
+    if state['state'] == 'ready':
+        return redirect(link)
+    return await render_template('prepare.html', state=state, section=ticket['section']), 202 if state['state'] in ('queued', 'preparing') else 410
 
 
 @bp.route('/index/archive/<string:token>/<string:filename>')
 async def download_archive(token, filename):
-    if not re.fullmatch(r'[A-Za-z0-9_-]{43}', token):
-        return _private(await make_response('Download link not found.', 404))
+    ticket = await _archive_ticket(token)
     try:
-        ticket = await db.db['download_tickets'].find_one({'_id': token})
-        if not ticket:
-            return _private(await make_response('Download link expired. Select the files again.', 410))
-        expiry = ticket['expires_at'].replace(tzinfo=timezone.utc)
-        if datetime.now(timezone.utc) >= expiry:
-            return _private(await make_response('Download link expired. Select the files again.', 410))
-        if ticket['section'] == 'link':
-            settings = await index_access.settings()
-            revision = hashlib.sha256(settings['session_secret'].encode()).hexdigest()
-            if not hmac.compare_digest(ticket.get('revision', ''), revision):
-                return _private(await make_response('The password changed. Select the files again.', 410))
         files = await selected_files(ticket['codes'], ticket['section'])
-    except Exception as error:
-        logger.error('ZIP link lookup failed (%s).', type(error).__name__)
-        return _private(await make_response('The download is temporarily unavailable. Please try again.', 503))
-    if len(files) != len(ticket['codes']):
-        return _private(await make_response('A selected file was removed. Select the files again.', 409))
-    from bot.modules.archive import stream_archive, archive_size
-    from .main import transmit_file
+    except Exception:
+        abort(503, 'The catalog is temporarily unavailable. Please try again.')
+    current = [{key: item[key] for key in ('code', 'file_name', 'file_size')} for item in files]
+    if current != ticket['files']:
+        abort(409, 'A selected file changed or was removed. Select the files again.')
+    state = archive_cache.status(token, archive_size(ticket['files']))
+    if state['state'] in ('queued', 'preparing'):
+        return 'The ZIP is still being prepared. Wait for the download button.', 503, {'Retry-After': '2'}
+    if state['state'] != 'ready':
+        abort(410, 'The prepared ZIP is no longer available. Select the files again.')
+    response = await send_file(archive_cache.path(token), mimetype='application/zip',
+        as_attachment=True, attachment_filename=f'GateStream-{ticket["section"]}.zip')
+    await response.make_conditional(request)
+    if response.status_code == 200 and request.headers.get('Range') and (
+        not request.headers.get('If-Range') or not is_resource_modified(
+            http_range=request.headers['Range'], http_if_range=request.headers['If-Range'],
+            etag=response.headers.get('ETag'), last_modified=response.last_modified, ignore_if_range=False)):
+        # Normalize suffix/open ranges with Werkzeug before seeking. Quart 0.22's
+        # range handler passes negative suffix offsets directly to its file body.
+        requested = request.range
+        bounds = requested.range_for_length(state['total']) if requested else None
+        if bounds is None:
+            response.status_code = 416
+            response.set_data(b'')
+            response.headers['Content-Range'] = f'bytes */{state["total"]}'
+        else:
+            start, stop = bounds
+            await response.response.make_conditional(start, stop)
+            response.status_code = 206
+            response.content_length = stop - start
+            response.headers['Content-Range'] = f'bytes {start}-{stop-1}/{state["total"]}'
+    response.headers['Accept-Ranges'] = 'bytes'
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    if request.method == 'GET' and response.status_code in (200, 206):
+        body = response.response
+        body.buffer_size = 1024 * 1024
 
-    async def download(code):
-        return await transmit_file(code, range_allowed=False)
+        async def chunks():
+            async with body as source:
+                async for chunk in source:
+                    yield chunk
 
-    @stream_with_context
-    async def archive():
-        try:
-            async for chunk in stream_archive(files, download):
-                yield chunk
-        except Exception as error:
-            logger.error('ZIP transfer interrupted (%s).', type(error).__name__)
-            raise
-
-    try:
-        length = archive_size(files)
-    except (ValueError, KeyError, TypeError):
-        return _private(await make_response('File sizes are unavailable. Please index these files again.', 409))
-    response = Response(None if request.method == 'HEAD' else archive(), content_type='application/zip')
-    response.automatically_set_content_length = False
-    response.headers.update({
-        'Content-Disposition': f'attachment; filename="GateStream-{ticket["section"]}.zip"',
-        'Content-Length': str(length),
-        'Accept-Ranges': 'none',
-        'X-Content-Type-Options': 'nosniff',
-        'Referrer-Policy': 'no-referrer',
-    })
+        response.response = response.iterable_body_class(activity.track_stream(chunks(), response.content_length, f'zip:{token}'))
     response.timeout = None
-    response = _private(response)
-    response.headers['Referrer-Policy'] = 'no-referrer'
     return response
