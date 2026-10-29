@@ -84,6 +84,11 @@ class Server:
         BIND_ADDRESS = "0.0.0.0"
 
 
+class Metadata:
+    MAL_CLIENT_ID = env.get('MAL_CLIENT_ID', '').strip()
+    OMDB_API_KEY = env.get('OMDB_API_KEY', '').strip()
+
+
 class Drive:
     ENABLED = env.get("DRIVE_ENABLED", "false").lower() in ("1", "true", "yes")
     TOKEN_PATH = env.get("DRIVE_TOKEN_PATH", "token.pickle")
