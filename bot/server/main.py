@@ -1,6 +1,8 @@
 import asyncio
+from contextlib import aclosing
 from logging import getLogger
 from quart import Blueprint, Response, request, render_template, jsonify
+from bot import version
 from math import ceil
 from re import match as re_match
 from .error import abort
@@ -9,7 +11,7 @@ from bot.clients import get_worker_client, TelegramBot, mark_worker_cooldown, wo
 from bot.config import Telegram, Server
 from bot.database import db
 from bot.database.files import get_file, add_bandwidth_bytes
-from bot.modules.telegram import get_message, get_file_properties, get_media_chunk
+from bot.modules.telegram import get_message, get_file_properties, get_media_chunk, iter_media_chunks
 from bot.modules.static import get_human_size
 from bot.modules.memory import flush_ram, check_memory_circuit_breaker
 from bot.modules.activity import activity
@@ -36,7 +38,7 @@ async def home():
 @bp.route('/ping')
 @bp.route('/health')
 async def health_check():
-    return "OK", 200
+    return "OK", 200, {'X-GateStream-Version': version}
 
 
 @bp.route('/api/activity')
@@ -161,8 +163,7 @@ async def transmit_file(file_code, range_allowed=True, parallel=False):
         bytes_streamed = 0
         current_start = start
         offset = current_start // chunk_size
-        remaining_total = end - current_start + 1
-        chunks_needed = ceil(remaining_total / chunk_size)
+        chunks_needed = end // chunk_size - offset + 1
         total_chunks = ceil(file_size / chunk_size)
 
         curr_offset = offset
@@ -214,7 +215,7 @@ async def transmit_file(file_code, range_allowed=True, parallel=False):
         # 2. Dual-Engine Streaming Architecture
         # -------------------------------------------------------------------------
         # Mode A: Multi-Worker Concurrent Chunk Pipeliner
-        # Activated for video playback and internally requested ZIP source streams.
+        # Optional for video playback; ZIP sources use the continuous path below.
         # Keeps a bounded window of up to four chunk reads across the worker pool.
         # Overlaps Telegram request latency while emitting chunks in their original order.
         #
@@ -345,7 +346,7 @@ async def transmit_file(file_code, range_allowed=True, parallel=False):
                 flush_ram()
 
         else:
-            # Mode B: Continuous Sequential Stream for multi-connection downloads
+            # Mode B: Continuous stream for downloads and ZIP sources, with stall recovery.
             retry_count = 0
             MAX_RETRIES = 12
 
@@ -371,34 +372,34 @@ async def transmit_file(file_code, range_allowed=True, parallel=False):
                         continue
 
                     try:
-                        async for chunk in worker_client.stream_media(msg, offset=curr_offset):
-                            if is_head_or_tail(curr_offset, total_chunks):
-                                asyncio.create_task(put_cached_chunk(file_code, curr_offset, chunk, total_chunks))
+                        async with aclosing(iter_media_chunks(worker_client, msg, curr_offset, end_chunk - curr_offset)) as stream:
+                            async for chunk in stream:
+                                if is_head_or_tail(curr_offset, total_chunks):
+                                    asyncio.create_task(put_cached_chunk(file_code, curr_offset, chunk, total_chunks))
 
-                            if bytes_streamed == 0:
-                                trim_start = current_start % chunk_size
-                                if trim_start > 0:
-                                    chunk = chunk[trim_start:]
+                                if bytes_streamed == 0:
+                                    trim_start = current_start % chunk_size
+                                    if trim_start > 0:
+                                        chunk = chunk[trim_start:]
 
-                            rem_bytes = content_length - bytes_streamed
-                            if rem_bytes <= 0:
-                                return
+                                rem_bytes = content_length - bytes_streamed
+                                if rem_bytes <= 0:
+                                    return
 
-                            if len(chunk) > rem_bytes:
-                                chunk = chunk[:rem_bytes]
+                                if len(chunk) > rem_bytes:
+                                    chunk = chunk[:rem_bytes]
 
-                            yield chunk
-                            bytes_streamed += len(chunk)
-                            del chunk
-                            curr_offset += 1
-                            retry_count = 0
+                                yield chunk
+                                bytes_streamed += len(chunk)
+                                del chunk
+                                curr_offset += 1
+                                retry_count = 0
 
-                            if curr_offset % 20 == 0:
-                                check_memory_circuit_breaker()
+                                if curr_offset % 20 == 0:
+                                    check_memory_circuit_breaker()
 
-                            if bytes_streamed >= content_length or curr_offset >= end_chunk:
-                                return
-
+                        if bytes_streamed < content_length:
+                            raise IOError("Telegram stream ended before the requested bytes arrived")
                     except (asyncio.CancelledError, GeneratorExit):
                         raise
                     except Exception as stream_err:
