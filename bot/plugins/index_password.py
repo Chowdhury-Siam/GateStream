@@ -9,13 +9,6 @@ from bot.modules.index_access import set_password
 logger = logging.getLogger('bot')
 
 
-@TelegramBot.on_message(filters.command('index') & filters.private)
-@verify_user
-async def index_link_command(_, message):
-    await message.reply('Browse Index files freely. Open the Link tab and enter the password to browse single-file links.', quote=True,
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton('Open media index', url=f'{Server.BASE_URL}/index')]]))
-
-
 @TelegramBot.on_message(filters.command(['setpassword', 'indexpassword']) & filters.private)
 @verify_user
 async def index_password_command(_, message):
