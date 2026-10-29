@@ -115,3 +115,11 @@ The Worker accepts GET/HEAD plus POST to `/index/login`, `/index/logout` and
 `/index/download`. It forwards form bodies, cookies and origin response headers
 without buffering streamed ZIPs. Other POST paths remain rejected. Redeploy the
 Worker after updating so the Link password and selected-download forms work.
+
+Selected-file POST requests now create a short-lived GET URL under
+`/index/archive/<token>/GateStream-<section>.zip`. GET and HEAD need no browser
+cookies because the unguessable ticket authorizes only that saved selection.
+The server supplies Content-Length and the Worker forwards it. ZIPs use one
+connection and cannot be resumed; do not enable forced parallel ranges for
+these URLs. Tickets expire after one hour and Link password changes invalidate
+private tickets. Do not share a ticket URL beyond its intended recipients.
