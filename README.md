@@ -206,8 +206,34 @@ page; changing the page or filters resets it. The server checks every selected
 code against its section, so a public ZIP request cannot include private Link
 records. ZIP64 supports large files.
 
-Since version 2.0.3, selected files are prepared into one temporary, uncompressed
-ZIP before the download starts. The page shows queued/preparing progress and
+Version 2.0.5 offers two choices before downloading selected files:
+
+| Option | Starts | Resume and multiple connections |
+| --- | --- | --- |
+| **Start immediately** (default) | Sends available ZIP bytes while the shared archive is still being built | Yes; later ranges wait for their bytes |
+| **Prepare with resume** | Waits for the complete temporary ZIP, showing progress | Yes, with all ranges ready |
+
+Immediate mode now writes one shared temporary ZIP in the background. The first
+connection can read the opening bytes before the ZIP finishes; concurrent range
+requests read the same stable bytes and never start duplicate Telegram fetches.
+HEAD, Content-Length, 206 ranges, suffix/open ranges, ETags and If-Range work
+before and after completion. Pausing a client does not stop the shared builder.
+A connection requesting bytes not yet built waits for them; more connections do
+not make Telegram preparation faster. A manager/proxy may time out a waiting
+range and retry. Prepared mode avoids these preparation waits during download.
+
+Both modes reserve their total size in the same 8 GiB temporary-disk budget.
+Up to two live ZIP builders run independently of the one-at-a-time preparation
+queue. Extra live jobs or selections exceeding capacity fail with a clear
+message. All clients share one builder per ticket, so connection count does not
+multiply Telegram source reads. GET links last 24 hours and retain the same
+section and password-revocation rules. Older streaming links remain single
+connection; make a new selection to use the live range support.
+
+The following completed-file details apply to **Prepare with resume**.
+
+Selected files are prepared into one temporary, uncompressed ZIP before the
+client download starts. The page shows queued/preparing progress and
 automatically starts the download when ready. Preparation uses continuous
 Telegram reads with stalled-read recovery; it does not keep whole files in RAM.
 The completed ZIP is immutable and served from disk, so clients can pause,
@@ -220,15 +246,15 @@ The **Download ZIP** and **Copy download link** controls provide a GET `.zip`
 URL that works without browser cookies or POST data. HEAD, byte ranges, 206
 responses, ETags and If-Range validators are supported. Suffix/open-ended ranges
 work, and invalid or multipart ranges receive 416. Download managers can use
-multiple connections (start with four). The archive is retained until its link
+multiple connections (start with four). The completed archive is retained until its link
 expires, 24 hours after selection. Anyone holding the URL can download its
 selected files during that time. Changing the Link password invalidates private
 ZIP links, including subsequent range requests. Removing or changing a selected
 catalog record also prevents new requests.
 
-Preparation has a shared 8 GiB disk budget, configurable with
-`ZIP_CACHE_MAX_MB`; `ZIP_CACHE_DIR` optionally chooses its directory. One ZIP is
-prepared at a time to keep Telegram connections and memory bounded. Space is
+Both ZIP modes have a shared 8 GiB disk budget, configurable with
+`ZIP_CACHE_MAX_MB`; `ZIP_CACHE_DIR` optionally chooses its directory. One prepared-mode ZIP is
+built at a time, alongside at most two live builds, to keep memory bounded. Space is
 reserved for queued jobs, and requests exceeding the budget or available free
 disk fail with a clear message. Unexpired ZIPs are not evicted to make room;
 expired files and interrupted preparations are cleaned on subsequent selections.
@@ -237,7 +263,9 @@ where disk space permits. A host rebuild can remove temporary storage; completed
 ZIPs can resume after a normal process restart when their files remain. If a ZIP
 is lost, its old link fails with 410 instead of silently generating different
 bytes under the same URL. Choose a fresh selection after a rebuild or failure.
-Old streaming ZIP links from earlier versions also need a new selection.
+If a live build is interrupted before completion, its partial file is removed;
+choose a new selection. A completed ZIP retains the same ETag after a normal
+process restart if its cached file survives.
 
 The initial **Link** password is **`Siam`** (case-sensitive). If you previously
 changed it, that saved password is retained. The account whose Telegram ID
