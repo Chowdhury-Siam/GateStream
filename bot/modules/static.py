@@ -25,7 +25,9 @@ WelcomeText = """\
 Hi **%(first_name)s**. Turn your Telegram library into stream and download links. Open a gate. Press play.
 
 **User Commands:**
-🔐 `/index` - Open public Index files and password-protected Link files.
+🌐 `/catalog` - Open public Index files and password-protected Link files.
+🔎 `/index <last_post_link>` - Auto-index a channel and identify media categories.
+⏹ `/cancelindex` - Stop indexing and retain progress (admin).
 🔍 `/search <name>` - Search movies, anime & series with streaming links.
 ⚡ `/search_api <name>` - Search and get 1-tap copyable API endpoints.
 🎬 `/link [category] <link>` - Index single file (Movie, Anime OVA, or Series).
@@ -55,7 +57,9 @@ PrivacyText = """
 
 **3. User Control:** You can revoke links anytime using the "Revoke" button or commands.
 
-**4. Your Deployment:** The hosting provider and deployment owner control the server and database. [View GateStream's source](https://github.com/Chowdhury-Siam/GateStream) before deploying your own instance.
+**4. Automatic Categories:** Cleaned media titles and release years are sent to AniList and any configured MyAnimeList/OMDb providers during automatic classification. Channel scans are public in Index; /link discovery is password protected. Temporary ZIP links authorize their selected files for one hour.
+
+**5. Your Deployment:** The hosting provider and deployment owner control the server and database. [View GateStream's source](https://github.com/Chowdhury-Siam/GateStream) before deploying your own instance.
 
 __By using this bot, you agree to this policy.__
 """
