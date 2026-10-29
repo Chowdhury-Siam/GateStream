@@ -15,7 +15,7 @@ from bot.database import db
 from bot.database.catalog import CATEGORIES, PAGE_SIZE, list_files, selected_files
 from bot.modules import index_access
 from bot.modules.static import get_human_size
-from bot.modules.archive import archive_size
+from bot.modules.archive import archive_size, stream_archive
 from bot.modules.archive_cache import archive_cache, ARCHIVE_AGE
 from bot.modules.activity import activity
 from .error import abort
@@ -167,6 +167,9 @@ async def download_selected():
     section = form.get('section', '')
     if section not in ('index', 'link'):
         return _private(await make_response('Invalid catalog section.', 400))
+    mode = form.get('mode', 'prepare')
+    if mode not in ('stream', 'prepare'):
+        return _private(await make_response('Choose Start immediately or Prepare with resume.', 400))
     if section == 'link' and not await authenticated():
         return await _login('Enter the password before downloading selected Link files.', 401)
     codes = list(dict.fromkeys(form.getlist('code')))
@@ -181,7 +184,7 @@ async def download_selected():
         return _private(await make_response('Some selected files are no longer in this category. Reload and select again.', 409))
     try:
         token = secrets.token_urlsafe(32)
-        ticket = dict(_id=token, codes=codes, section=section, archive_version=2,
+        ticket = dict(_id=token, codes=codes, section=section, mode=mode, archive_version=3,
             files=[{key: item[key] for key in ('code', 'file_name', 'file_size')} for item in files],
             expires_at=datetime.now(timezone.utc) + timedelta(seconds=ARCHIVE_AGE))
         if section == 'link':
@@ -193,7 +196,7 @@ async def download_selected():
         async def download(code):
             return await transmit_file(code, range_allowed=False, internal=True)
 
-        await archive_cache.start(token, ticket['files'], download, ticket['expires_at'].timestamp())
+        await archive_cache.start(token, ticket['files'], download, ticket['expires_at'].timestamp(), progressive=mode == 'stream')
     except ValueError as error:
         return _private(await make_response(str(error), 413))
     except Exception as error:
@@ -201,8 +204,8 @@ async def download_selected():
         return _private(await make_response('Unable to create the download link. Please try again.', 503))
     link = url_for('catalog.download_archive', token=token, filename=f'GateStream-{section}.zip')
     if request.accept_mimetypes.best == 'application/json':
-        return _private(jsonify(url=link, status_url=url_for('catalog.archive_status', token=token)))
-    return _private(redirect(url_for('catalog.prepare_archive', token=token), code=303))
+        return _private(jsonify(url=link, mode=mode, status_url=url_for('catalog.archive_status', token=token)))
+    return _private(redirect(link if mode == 'stream' else url_for('catalog.prepare_archive', token=token), code=303))
 
 
 async def _archive_ticket(token):
@@ -222,7 +225,7 @@ async def _archive_ticket(token):
         abort(410, 'Download link expired. Select the files again.')
     if revoked:
         abort(410, 'The password changed. Select the files again.')
-    if ticket.get('archive_version') != 2:
+    if ticket.get('archive_version') not in (2, 3):
         abort(410, 'Create a new selection to use resumable ZIP downloads.')
     return ticket
 
@@ -230,6 +233,8 @@ async def _archive_ticket(token):
 @bp.route('/index/archive/<string:token>/status')
 async def archive_status(token):
     ticket = await _archive_ticket(token)
+    if ticket.get('mode') == 'stream' and ticket['archive_version'] == 2:
+        return jsonify(state='ready', bytes=0, total=archive_size(ticket['files']))
     state = archive_cache.status(token, archive_size(ticket['files']))
     return jsonify(state), 200 if state['state'] == 'ready' else 202 if state['state'] in ('queued', 'preparing') else 410
 
@@ -237,11 +242,37 @@ async def archive_status(token):
 @bp.route('/index/prepare/<string:token>')
 async def prepare_archive(token):
     ticket = await _archive_ticket(token)
-    state = archive_cache.status(token, archive_size(ticket['files']))
     link = url_for('catalog.download_archive', token=token, filename=f'GateStream-{ticket["section"]}.zip')
+    if ticket.get('mode') == 'stream':
+        return redirect(link)
+    state = archive_cache.status(token, archive_size(ticket['files']))
     if state['state'] == 'ready':
         return redirect(link)
     return await render_template('prepare.html', state=state, section=ticket['section']), 202 if state['state'] in ('queued', 'preparing') else 410
+
+
+async def _archive_range(response, total):
+    """Use identical HTTP range/validator behavior for finished and growing ZIPs."""
+    await response.make_conditional(request)
+    bounds = (0, total)
+    if response.status_code == 200 and request.headers.get('Range') and (
+        not request.headers.get('If-Range') or not is_resource_modified(
+            http_range=request.headers['Range'], http_if_range=request.headers['If-Range'],
+            etag=response.headers.get('ETag'), last_modified=response.last_modified, ignore_if_range=False)):
+        # Normalize suffix/open ranges before seeking (including Quart 0.22).
+        requested = request.range
+        bounds = requested.range_for_length(total) if requested else None
+        if bounds is None:
+            response.status_code = 416
+            response.set_data(b'')
+            response.headers['Content-Range'] = f'bytes */{total}'
+        else:
+            start, stop = bounds
+            response.status_code = 206
+            response.content_length = stop - start
+            response.headers['Content-Range'] = f'bytes {start}-{stop-1}/{total}'
+    response.headers['Accept-Ranges'] = 'bytes'
+    return bounds if response.status_code in (200, 206) else None
 
 
 @bp.route('/index/archive/<string:token>/<string:filename>')
@@ -254,33 +285,48 @@ async def download_archive(token, filename):
     current = [{key: item[key] for key in ('code', 'file_name', 'file_size')} for item in files]
     if current != ticket['files']:
         abort(409, 'A selected file changed or was removed. Select the files again.')
+    if ticket.get('mode') == 'stream' and ticket['archive_version'] == 2:
+        from .main import transmit_file
+
+        async def download(code):
+            return await transmit_file(code, range_allowed=False, internal=True)
+
+        length = archive_size(ticket['files'])
+        body = None if request.method == 'HEAD' else activity.track_stream(
+            stream_archive(ticket['files'], download), length, f'zip:{token}')
+        response = Response(body, content_type='application/zip')
+        response.automatically_set_content_length = False
+        response.headers.update({
+            'Content-Disposition': f'attachment; filename="GateStream-{ticket["section"]}.zip"',
+            'Content-Length': str(length), 'Accept-Ranges': 'none', 'X-Content-Type-Options': 'nosniff',
+        })
+        response.timeout = None
+        return response
     state = archive_cache.status(token, archive_size(ticket['files']))
+    if ticket.get('mode') == 'stream':
+        if state['state'] not in ('queued', 'preparing', 'ready'):
+            abort(410, 'The live ZIP is no longer available. Select the files again.')
+        response = Response(content_type='application/zip')
+        response.content_length = state['total']
+        response.set_etag(f'gatestream-{token}')
+        response.last_modified = ticket['expires_at'].replace(tzinfo=timezone.utc) - timedelta(seconds=ARCHIVE_AGE)
+        response.headers['Content-Disposition'] = f'attachment; filename="GateStream-{ticket["section"]}.zip"'
+        response.headers['X-Content-Type-Options'] = 'nosniff'
+        bounds = await _archive_range(response, state['total'])
+        if request.method == 'GET' and bounds is not None:
+            response.response = response.iterable_body_class(activity.track_stream(
+                archive_cache.read(token, *bounds), response.content_length, f'zip:{token}'))
+        response.timeout = None
+        return response
     if state['state'] in ('queued', 'preparing'):
         return 'The ZIP is still being prepared. Wait for the download button.', 503, {'Retry-After': '2'}
     if state['state'] != 'ready':
         abort(410, 'The prepared ZIP is no longer available. Select the files again.')
     response = await send_file(archive_cache.path(token), mimetype='application/zip',
         as_attachment=True, attachment_filename=f'GateStream-{ticket["section"]}.zip')
-    await response.make_conditional(request)
-    if response.status_code == 200 and request.headers.get('Range') and (
-        not request.headers.get('If-Range') or not is_resource_modified(
-            http_range=request.headers['Range'], http_if_range=request.headers['If-Range'],
-            etag=response.headers.get('ETag'), last_modified=response.last_modified, ignore_if_range=False)):
-        # Normalize suffix/open ranges with Werkzeug before seeking. Quart 0.22's
-        # range handler passes negative suffix offsets directly to its file body.
-        requested = request.range
-        bounds = requested.range_for_length(state['total']) if requested else None
-        if bounds is None:
-            response.status_code = 416
-            response.set_data(b'')
-            response.headers['Content-Range'] = f'bytes */{state["total"]}'
-        else:
-            start, stop = bounds
-            await response.response.make_conditional(start, stop)
-            response.status_code = 206
-            response.content_length = stop - start
-            response.headers['Content-Range'] = f'bytes {start}-{stop-1}/{state["total"]}'
-    response.headers['Accept-Ranges'] = 'bytes'
+    bounds = await _archive_range(response, state['total'])
+    if bounds is not None:
+        await response.response.make_conditional(*bounds)
     response.headers['X-Content-Type-Options'] = 'nosniff'
     if request.method == 'GET' and response.status_code in (200, 206):
         body = response.response
