@@ -14,6 +14,8 @@ def _pipeline(category, query, section='index'):
         source = {'$nor': [source]}
     fields = {
         '_id': 0, 'created_at': 1, 'category': {'$literal': category},
+        'metadata_source': {'$ifNull': ['$metadata.source', '']},
+        'metadata_status': {'$ifNull': ['$metadata.status', '']},
         'code': {'$cond': ['$_is_batch', '$episodes.code', {'$ifNull': ['$code', '$_id']}]},
         'batch_title': {'$cond': ['$_is_batch', {'$ifNull': ['$title', '']}, '']},
     }
