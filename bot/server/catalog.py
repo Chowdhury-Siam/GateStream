@@ -1,3 +1,4 @@
+import asyncio
 import hmac
 import hashlib
 from datetime import datetime, timedelta, timezone
@@ -160,6 +161,19 @@ async def index_logout():
 
 @bp.route('/index/download', methods=['POST'])
 async def download_selected():
+    # Link creation must finish before proxy timeouts; ZIP bytes are built by
+    # ArchiveCache's detached task after this short request has returned.
+    try:
+        async with asyncio.timeout(25):
+            return await _create_download()
+    except TimeoutError:
+        logger.warning('ZIP link creation timed out before preparation status was available.')
+        response = await make_response('The server could not create your ZIP link in time. Please try again shortly.', 503)
+        response.headers['Retry-After'] = '3'
+        return _private(response)
+
+
+async def _create_download():
     request.max_content_length = 16384
     form = await request.form
     if not _csrf_valid(form):
@@ -252,7 +266,7 @@ async def prepare_archive(token):
     state = archive_cache.status(token, archive_size(ticket['files']))
     if state['state'] == 'ready':
         return redirect(link)
-    return await render_template('prepare.html', state=state, section=ticket['section']), 202 if state['state'] in ('queued', 'preparing') else 410
+    return await render_template('prepare.html', state=state, section=ticket['section'], get_human_size=get_human_size), 202 if state['state'] in ('queued', 'preparing') else 410
 
 
 async def _archive_range(response, total):
