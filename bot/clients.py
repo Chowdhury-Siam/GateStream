@@ -72,7 +72,7 @@ def mark_worker_cooldown(worker_name: str, duration: float):
     """Temporarily marks a worker bot on cooldown if rate-limited by Telegram."""
     import time
     _worker_cooldowns[worker_name] = time.time() + duration
-    logger.warning("Worker %s placed on cooldown for %.1fs due to Telegram rate-limiting.", worker_name, duration)
+    logger.warning("Worker %s cooling down for %.1fs after a media read failure or Telegram limit.", worker_name, duration)
 
 def get_worker_client() -> Client:
     """Returns the next healthy worker client from the pool, skipping any currently on cooldown."""
