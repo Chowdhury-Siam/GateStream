@@ -5,16 +5,16 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#10100e">
   <meta name="robots" content="noindex,nofollow">
-  <title>{{ 'Index' if section == 'index' else 'Link' }} · GateStream</title>
+  <title>{{ 'Library' if section == 'index' else 'Private links' }} · GateStream</title>
   <style>
     * { box-sizing: border-box; }
-    body { margin: 0; min-height: 100vh; background: #10100e; color: #f4f0e7; font: 15px/1.6 system-ui, sans-serif; }
-    main { max-width: 1040px; margin: auto; padding: 32px; }
+    body { margin: 0; min-height: 100vh; background: #10100e; color: #f4f0e7; font: 15px/1.5 system-ui, sans-serif; }
+    main { max-width: 1040px; margin: auto; padding: 24px; }
     a { color: #d6ad60; text-underline-offset: 4px; }
     a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid #f1d89c; outline-offset: 4px; }
     nav, .brand, .heading, .pager { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
     .brand { justify-content: flex-start; gap: 12px; color: #f4f0e7; font-size: 21px; font-weight: 700; text-decoration: none; }
-    .tabs { display:flex; justify-content:flex-start; gap:10px; margin-top:32px; }
+    .tabs { display:flex; justify-content:flex-start; gap:10px; margin-top:20px; }
     .tab { padding:10px 24px; border:1px solid #494437; border-radius:8px; text-decoration:none; }
     .tab[aria-current="page"] { background:#d6ad60; color:#17130d; border-color:#d6ad60; font-weight:650; }
     [hidden] { display:none !important; }
@@ -23,11 +23,14 @@
     input[type="checkbox"] { width:19px; height:19px; padding:0; accent-color:#d6ad60; flex-shrink:0; }
     button:disabled { opacity:.45; cursor:default; }
     .bulk .muted { flex-basis:100%; }
-    .zip-modes { flex-basis:100%; margin:0; padding:12px; border:1px solid #494437; border-radius:8px; }
-    .zip-modes legend { padding:0 6px; font-size:12px; color:#c9c5b9; }
-    .zip-modes label { display:flex; align-items:flex-start; gap:10px; margin:6px 0; font-size:13px; }
-    .zip-modes input { width:18px; height:18px; flex-shrink:0; accent-color:#d6ad60; margin:3px 0 0; padding:0; }
-    .zip-modes small { display:block; color:#918e83; font-size:12px; }
+    .zip-settings { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:8px 10px; flex-basis:100%; }
+    .zip-settings label { display:block; font-size:12px; margin:0 0 5px; cursor:default; }
+    .zip-settings > div { min-width:0; }
+    .zip-settings select { font-size:13px; padding:10px 8px; min-height:44px; }
+    .zip-help { grid-column:1 / -1; font-size:11px; color:#aaa89f; }
+    .name-input { display:flex; align-items:center; border:1px solid #494437; border-radius:8px; background:#10100e; }
+    .name-input input { border:0; background:transparent; padding:10px; font-size:14px; min-height:44px; }
+    .name-input span { color:#aaa89f; padding-right:12px; font-size:13px; }
     .file-title { display:flex; align-items:flex-start; gap:12px; }
     .file-title .pick { padding-top:3px; }
     .brand svg { width: 42px; height: 42px; }
@@ -35,7 +38,7 @@
     .eyebrow { color: #d6ad60; font-size: 11px; font-weight: 650; letter-spacing: 2.5px; text-transform: uppercase; }
     h1 { font-size: clamp(30px, 5vw, 48px); line-height: 1.15; letter-spacing: -1.5px; margin: 16px 0; }
     p { color: #aaa89f; margin: 8px 0; }
-    .lock-card { max-width: 440px; margin: 88px auto; padding: 32px; background: #171611; border: 1px solid #39362c; border-radius: 16px; }
+    .lock-card { max-width: 440px; margin: 88px auto; padding: 24px; background: #171611; border: 1px solid #39362c; border-radius: 16px; }
     .lock-card h1 { font-size: 34px; }
     label { display: block; font-size: 12px; color: #c9c5b9; margin: 24px 0 8px; }
     input, select { width: 100%; background: #10100e; border: 1px solid #494437; border-radius: 8px; color: #f4f0e7; padding: 12px 14px; font: inherit; min-width: 0; }
@@ -45,7 +48,7 @@
     .unlock { width: 100%; margin-top: 18px; }
     .muted { font-size: 12px; color: #918e83; }
     .error { color: #efb2a3; background: #35221d; border: 1px solid #6d4034; border-radius: 8px; padding: 10px 12px; margin-top: 20px; font-size: 13px; }
-    .heading { margin: 52px 0 30px; align-items: flex-end; }
+    .heading { margin: 26px 0 18px; align-items: flex-end; }
     .heading h1 { margin-bottom: 8px; }
     .ghost { color: #c9c5b9; background: transparent; border-color: #494437; font-size: 12px; white-space: nowrap; }
     .ghost:hover { color: #f4f0e7; background: #242118; }
@@ -67,9 +70,9 @@
     .pager span { color: #918e83; }
     footer { margin-top: 40px; padding-top: 20px; border-top: 1px solid #333129; font-size: 11px; color: #918e83; }
     @media (max-width: 600px) {
-      main { padding: 24px; } .brand { font-size: 18px; gap: 8px; } .brand svg { width: 34px; height: 34px; }
+      main { padding: 16px; } .brand { font-size: 18px; gap: 8px; } .brand svg { width: 34px; height: 34px; }
       .lock-card { margin: 56px auto; padding: 24px; }
-      .heading { margin-top: 40px; } .filters { grid-template-columns: 1fr 1fr; padding: 14px; }
+      .heading { margin-top: 24px; } .filters { grid-template-columns: 1fr 1fr; padding: 14px; }
       .search-field { grid-column: 1 / -1; } .file { grid-template-columns: 1fr; gap: 14px; padding: 16px; }
       .file-actions { justify-content: flex-end; } .results { flex-wrap: wrap; }
     }
@@ -77,32 +80,32 @@
 </head>
 <body>
   <main>
-    <nav aria-label="GateStream"><a class="brand" href="/">{% include 'brand.svg' %}<span>GateStream</span></a><a class="nav-link" href="/">Back to home</a></nav>
+    <nav aria-label="GateStream"><a class="brand" href="/">{% include 'brand.svg' %}<span>GateStream</span></a><a class="nav-link" href="/">Home</a></nav>
     <nav class="tabs" aria-label="File categories">
-      <a class="tab" href="{{ url_for('catalog.index_page') }}"{% if section == 'index' %} aria-current="page"{% endif %}>Index</a>
-      <a class="tab" href="{{ url_for('catalog.index_page', section='link') }}"{% if section == 'link' %} aria-current="page"{% endif %}>Link</a>
+      <a class="tab" href="{{ url_for('catalog.index_page') }}"{% if section == 'index' %} aria-current="page"{% endif %}>Library</a>
+      <a class="tab" href="{{ url_for('catalog.index_page', section='link') }}"{% if section == 'link' %} aria-current="page"{% endif %}>Private links</a>
     </nav>
     {% if not unlocked %}
     <section class="lock-card" aria-labelledby="login-title">
       <p class="eyebrow">Private file links</p>
-      <h1 id="login-title">Unlock Link.</h1>
-      <p>Enter the password to browse Link files. The Index tab is free for everyone.</p>
+      <h1 id="login-title">Private links</h1>
+      <p>Enter the password to browse Link files. The Library is open to everyone.</p>
       {% if error %}<div class="error" role="alert">{{ error }}</div>{% endif %}
       <form action="{{ url_for('catalog.index_login') }}" method="post">
         <input type="hidden" name="csrf" value="{{ csrf }}">
         <label for="password">Link password</label>
         <input id="password" name="password" type="password" autocomplete="current-password" maxlength="256" required autofocus>
-        <button class="unlock" type="submit">Unlock Link →</button>
+        <button class="unlock" type="submit">Unlock files →</button>
       </form>
       <p class="muted" style="margin-top:18px">Ask the library owner if you need the password.</p>
     </section>
     {% else %}
-    <header class="heading"><div><p class="eyebrow">{{ 'Open to everyone' if section == 'index' else 'Password protected' }}</p><h1>{{ 'The public index.' if section == 'index' else 'Your file links.' }}</h1><p>{{ 'Browse indexed batches and their episodes.' if section == 'index' else 'Browse single-file links created through the bot.' }}</p></div>
+    <header class="heading"><div><p class="eyebrow">{{ 'Open to everyone' if section == 'index' else 'Password protected' }}</p><h1>{{ 'Your library' if section == 'index' else 'Private links' }}</h1><p>{{ 'Find a file, watch online, or download a ZIP.' if section == 'index' else 'Files shared through the bot. Select several to download together.' }}</p></div>
       {% if signed_in %}<form action="{{ url_for('catalog.index_logout') }}" method="post"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="ghost" type="submit">Sign out</button></form>{% endif %}
     </header>
     <form class="filters" action="{{ url_for('catalog.index_page') }}" method="get">
       <input type="hidden" name="section" value="{{ section }}">
-      <div class="search-field"><label for="q">Search files or batch titles</label><input id="q" name="q" value="{{ query }}" placeholder="Search your library…" maxlength="100" type="search"></div>
+      <div class="search-field"><label for="q">Search files</label><input id="q" name="q" value="{{ query }}" placeholder="Search your library…" maxlength="100" type="search"></div>
       <div><label for="category">Category</label><select name="category" id="category"><option value="all">All categories</option>{% for value in categories %}<option value="{{ value }}"{% if category == value %} selected{% endif %}>{{ {'movies':'Movies','anime':'Anime','webseries':'Web series','direct_files':'Direct files'}[value] }}</option>{% endfor %}</select></div>
       <button type="submit">Search</button>
     </form>
@@ -111,14 +114,15 @@
       <input type="hidden" name="csrf" value="{{ csrf }}">
       <input type="hidden" name="section" value="{{ section }}">
       {% if files %}<div class="bulk">
-        <label><input id="select-all" type="checkbox"> Select this page</label>
-        <fieldset id="zip-mode" class="zip-modes"><legend>ZIP download</legend>
-          <label><input type="radio" name="mode" value="stream" checked><span>Start immediately<small>Resume and multiple connections. Later sections may wait while the ZIP is built.</small></span></label>
-          <label><input type="radio" name="mode" value="prepare"><span>Prepare with resume<small>Wait for preparation, then pause/resume or use multiple connections.</small></span></label>
-        </fieldset>
-        <button id="download-selected" type="submit" disabled>Download selected (0)</button>
+        <label><input id="select-all" type="checkbox"> Select all on page</label>
+        <div class="zip-settings">
+          <div><label for="zip-name">ZIP name</label><div class="name-input"><input id="zip-name" name="zip_name" maxlength="120" placeholder="e.g. Naruto season 10" aria-describedby="zip-name-help"><span>.zip</span></div></div>
+          <div><label for="zip-mode">Download mode</label><select id="zip-mode" name="mode" aria-describedby="zip-mode-help"><option value="stream">Start immediately</option><option value="prepare">Prepare first</option></select></div>
+          <small class="zip-help"><span id="zip-name-help">Optional name · .zip added automatically.</span> <span id="zip-mode-help">Both support resume; start now may pause to buffer.</span></small>
+        </div>
+        <button id="download-selected" type="submit" disabled>Download ZIP (0)</button>
         <span id="selection-count" role="status" aria-live="polite">0 selected</span>
-        <span class="muted">Download up to {{ page_size }} selected files together as one ZIP. Selection applies to this page.</span>
+        <span class="muted">Up to {{ page_size }} files per ZIP · this page only</span>
       </div>{% endif %}
     <div id="zip-ready" class="bulk" hidden><a id="zip-url" class="button" download>Download ZIP</a><button id="copy-zip" class="ghost" type="button">Copy download link</button><span id="zip-note" class="muted"></span><span id="zip-source" class="muted" role="status" aria-live="polite"></span></div>
     <section class="files" aria-label="Indexed files">
@@ -130,7 +134,7 @@
     </section>
     </form>
     <div class="pager">{% if page > 1 %}<a href="{{ url_for('catalog.index_page', page=page-1, q=query, category=category, section=section) }}">← Previous</a>{% else %}<span>First page</span>{% endif %}{% if page < pages %}<a href="{{ url_for('catalog.index_page', page=page+1, q=query, category=category, section=section) }}">Next →</a>{% else %}<span>End of results</span>{% endif %}</div>
-    <footer>GateStream · Public Index · Protected Link · Immediate or resumable ZIP downloads.</footer>
+    <footer>GateStream · Your library · Private links · ZIP downloads</footer>
     {% endif %}
   </main>
   {% if unlocked %}<script>
@@ -166,7 +170,7 @@
       all.checked = count === choices.length;
       all.indeterminate = count > 0 && count < choices.length;
       download.disabled = preparing || count === 0;
-      download.textContent = `Download selected (${count})`;
+      download.textContent = `Download ZIP (${count})`;
       document.getElementById('selection-count').textContent = `${count} selected`;
     }
     all?.addEventListener('change', () => {
@@ -174,6 +178,8 @@
       updateSelection();
     });
     choices.forEach(input => input.addEventListener('change', updateSelection));
+    document.getElementById('zip-name')?.addEventListener('input', updateSelection);
+    document.getElementById('zip-mode')?.addEventListener('change', updateSelection);
     document.getElementById('selection').addEventListener('submit', async event => {
       event.preventDefault();
       if (preparing) return;
@@ -187,11 +193,12 @@
       choices.forEach(input => { input.disabled = true; });
       all.disabled = true;
       document.getElementById('zip-mode').disabled = true;
+      document.getElementById('zip-name').disabled = true;
       const status = document.getElementById('selection-count');
       status.textContent = data.get('mode') === 'stream' ? 'Starting ZIP download…' : 'Preparing download link…';
       try {
         const response = await fetch(form.action, {method:'POST', body:data, headers:{Accept:'application/json'}});
-        if (!response.ok) throw new Error(response.status === 413 ? await response.text() : 'Unable to prepare the download. Reload, sign in if needed, and try again.');
+        if (!response.ok) throw new Error([400, 413].includes(response.status) ? await response.text() : 'Unable to prepare the download. Reload, sign in if needed, and try again.');
         const result = await response.json();
         while (result.mode !== 'stream') {
           const check = await fetch(result.status_url, {cache:'no-store'});
@@ -203,6 +210,7 @@
         }
         const link = document.getElementById('zip-url');
         link.href = result.url;
+        link.download = decodeURIComponent(result.url.split('/').pop());
         document.getElementById('zip-ready').hidden = false;
         const note = result.mode === 'stream' ? 'Live ZIP. Resume and multiple connections supported. Later sections may wait for Telegram.' : 'Prepared ZIP. Resume and multiple connections supported while available.';
         document.getElementById('zip-note').textContent = `${note} Link valid for 24 hours.`;
@@ -217,6 +225,7 @@
         choices.forEach(input => { input.disabled = false; });
         all.disabled = false;
         document.getElementById('zip-mode').disabled = false;
+        document.getElementById('zip-name').disabled = false;
         download.disabled = false;
       }
     });
