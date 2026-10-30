@@ -33,6 +33,23 @@ class Collection:
 
 
 class ActivityPersistenceTests(unittest.IsolatedAsyncioTestCase):
+    async def test_download_closed_at_content_length_is_saved_and_restored(self):
+        database = Collection()
+        first = TransferActivity()
+        store = ActivityStore(first, lambda: database)
+        self.assertTrue(await store.flush())
+        async def source(): yield b'abcdef'
+        for category in ('single', 'zip'):
+            stream = first.track_stream(source(), 6, category,
+                download=(category, 0, 6, b'manager'))
+            await anext(stream)
+            await stream.aclose()
+        self.assertTrue(await store.flush())
+        second = TransferActivity()
+        self.assertTrue(await ActivityStore(second, lambda: database).flush())
+        phase = second.snapshot()['phases']['media']
+        self.assertEqual((phase['single_downloads'], phase['zip_downloads']), (1, 1))
+
     async def test_restart_retains_totals_and_closes_previous_active_transfers(self):
         database=Collection()
         first=TransferActivity(clock=lambda:0)
