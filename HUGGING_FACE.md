@@ -53,7 +53,7 @@ In the Space's **Settings > Variables and secrets**, add these as **Secrets**:
 | `DATABASE_URL` | Your MongoDB connection URI from step 1 |
 
 Optional secrets: `MULTI_BOT_TOKENS` (space-separated worker tokens), `AUTH_USERS`
-(space-separated admin IDs), `ALLOWED_USER_IDS`, `TELEGRAM_CHANNEL_ID` (for direct
+(space-separated admin IDs), `ALLOWED_USER_IDS`, `TELEGRAM_CHANNEL_ID` (for new-user notices and direct
 uploads), and `OMNI_MONGO_URI` (a separate upstream catalog database). If using
 `OMNI_MONGO_URI`, it must also be reachable on an allowed port. Without it, the
 catalog uses the `OmniArchiverDB` database on your own MongoDB server.
@@ -118,15 +118,6 @@ Cloudflare deployment automation is supplied separately in `GateStream-GitHub.zi
 The Space must be permitted to run: source updates do not clear a paused
 `Flagged as abusive` status; request a review from Hugging Face in that case.
 
-## Optional Google Drive transfers
-
-The `/drive`, `/mirror` and `/clone` commands are included but disabled by default. HTTPS networking and temporary
-disk are technically available on Spaces, but this does not establish that a
-general file-transfer bot is permitted. Confirm permission with Hugging Face
-before enabling the feature. A paused/flagged Space still requires their review.
-See [GOOGLE_DRIVE.md](GOOGLE_DRIVE.md) for details. Never upload `token.pickle`
-to the Space repository; if approved, use the base64 host Secret described there.
-
 ## Channel indexing and media classification
 
 Use `/index LAST_POST_LINK` to scan a channel automatically, with progress and
@@ -173,7 +164,7 @@ that clear temporary storage require a new selection; missing archives return
 410 and are never silently regenerated for an existing partial download. Changing
 the Link password still invalidates protected ZIP links. Upload the updated
 source, restart the Space and select files again. `/health` should report
-`X-GateStream-Version: 2.0.8`.
+`X-GateStream-Version: 2.0.7`.
 
 ## Dashboard totals after a restart
 
@@ -186,34 +177,21 @@ interval; database failures are reported on the dashboard. Earlier unsaved
 counts cannot be recovered, except existing media bytes in the legacy bandwidth
 record where available.
 
-## ZIP names, compact controls and Drive index links (2.0.7)
+## v2.0.9 — v2.0.7 base without Drive integration
 
-The Library and Private links pages accept a ZIP name before download; type
-only the name, and `.zip` is added automatically. Resume and parallel Telegram
-source reads are preserved. The home page adds separate persistent single-file
-and ZIP delivery totals; bandwidth and Drive cards are expandable.
+The Library and Private links pages retain custom ZIP names; type only the name
+and `.zip` is added automatically. Resume, multiple connections, parallel source
+reads, compact controls and persistent single-file/ZIP totals remain available.
 
-On approved hosting, existing Drive credentials/folder settings still work.
-`/mirror` transfers direct URLs; `/clone` copies Drive files/folder trees within
-Google. Optional `DRIVE_INDEX_URL` must be the Bhadoo folder URL matching
-`DRIVE_FOLDER_ID`; the bot then returns encoded index download/browse buttons.
-`DRIVE_CLONE_MAX_FILES` defaults to 1000 items including folders. Use
-`/drivestatus` and `/canceldrive` to manage the one current job. Read
-[GOOGLE_DRIVE.md](GOOGLE_DRIVE.md) for policy findings, OAuth scopes, setup,
-cleanup and restart limits. The HTTPS capability is not blanket approval for
-a bulk mirror bot. Drive remains off unless explicitly enabled.
+Google Drive transfer commands, OAuth credential handling, dependencies,
+configuration and Bhadoo index buttons have been removed. The v2.0.8 settings
+menu is not included. Deploy a clean source tree, or remove retired files as
+listed in README's upgrade instructions. An explicit plugin list also prevents
+old Drive/settings plugins from being loaded if an overlay upload leaves them.
+Do not change existing database names, MongoDB settings or Telegram session
+files. Existing stored catalog records, totals and Link password are preserved.
 
-The health response now reports `X-GateStream-Version: 2.0.8`. Existing database
-names, settings and the Hugging Face README metadata are retained.
-
-## Owner settings panel (2.0.8)
-
-Use `/bset` in the owner's private chat or `/dset` for Google Drive. Runtime
-settings and encrypted private values are stored in the existing external
-MongoDB settings collection, so ephemeral Space disk does not erase them.
-Host identity/connection variables stay unchanged. The bot restores overrides
-before processing Telegram commands. Upload `token.json` only through the
-Private Files prompt; old host `token.pickle` settings still work. Install the
-updated requirements (including cryptography) when deploying. Keep the existing
-bot token stable, or re-enter encrypted values after rotation. See
-[BOT_SETTINGS.md](BOT_SETTINGS.md). HF workload permission remains separate.
+Source changes cannot lift an account suspension. This package still performs
+Telegram streaming and downloads; host approval is required for that workload.
+The health response reports `X-GateStream-Version: 2.0.9`. The existing HF README
+metadata is preserved.
