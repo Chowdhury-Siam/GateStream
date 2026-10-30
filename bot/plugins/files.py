@@ -23,7 +23,7 @@ async def handle_user_file(_, msg: Message):
     document = getattr(msg, 'document', None)
     private_name = (getattr(document, 'file_name', '') or '').lower()
     if private_name.endswith('.pickle') or (private_name.endswith('.json') and private_name.startswith(('token', 'credentials'))):
-        return await msg.reply('Private credential files are not media. The owner can use /bset → Private Files to configure Drive.', quote=True)
+        return await msg.reply('Private credential files must not be uploaded as media.', quote=False)
     if not Telegram.CHANNEL_ID or Telegram.CHANNEL_ID == 0:
         # If user forwards a file from a channel, inform them to use /link
         if msg.forward_from_chat and msg.forward_from_message_id:
