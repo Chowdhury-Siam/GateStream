@@ -15,7 +15,7 @@ from bot.database import db
 from bot.database.catalog import CATEGORIES, PAGE_SIZE, list_files, selected_files
 from bot.modules import index_access
 from bot.modules.static import get_human_size
-from bot.modules.archive import archive_size, stream_archive
+from bot.modules.archive import archive_size, stream_archive, archive_filename, archive_disposition
 from bot.modules.archive_cache import archive_cache, ARCHIVE_AGE
 from bot.modules.activity import activity
 from .error import abort
@@ -169,9 +169,13 @@ async def download_selected():
         return _private(await make_response('Invalid catalog section.', 400))
     mode = form.get('mode', 'prepare')
     if mode not in ('stream', 'prepare'):
-        return _private(await make_response('Choose Start immediately or Prepare with resume.', 400))
+        return _private(await make_response('Choose Start immediately or Prepare first.', 400))
     if section == 'link' and not await authenticated():
         return await _login('Enter the password before downloading selected Link files.', 401)
+    try:
+        filename = archive_filename(form.get('zip_name', ''), section)
+    except ValueError as error:
+        return _private(await make_response(str(error), 400))
     codes = list(dict.fromkeys(form.getlist('code')))
     if not 1 <= len(codes) <= PAGE_SIZE or any(not re.fullmatch(r'[A-Za-z0-9_-]{1,128}', code) for code in codes):
         return _private(await make_response(f'Select between 1 and {PAGE_SIZE} files on this page.', 400))
@@ -184,7 +188,7 @@ async def download_selected():
         return _private(await make_response('Some selected files are no longer in this category. Reload and select again.', 409))
     try:
         token = secrets.token_urlsafe(32)
-        ticket = dict(_id=token, codes=codes, section=section, mode=mode, archive_version=3,
+        ticket = dict(_id=token, codes=codes, section=section, mode=mode, archive_version=3, filename=filename,
             files=[{key: item[key] for key in ('code', 'file_name', 'file_size')} for item in files],
             expires_at=datetime.now(timezone.utc) + timedelta(seconds=ARCHIVE_AGE))
         if section == 'link':
@@ -202,7 +206,7 @@ async def download_selected():
     except Exception as error:
         logger.error('ZIP link creation failed (%s).', type(error).__name__)
         return _private(await make_response('Unable to create the download link. Please try again.', 503))
-    link = url_for('catalog.download_archive', token=token, filename=f'GateStream-{section}.zip')
+    link = url_for('catalog.download_archive', token=token, filename=filename)
     if request.accept_mimetypes.best == 'application/json':
         return _private(jsonify(url=link, mode=mode, status_url=url_for('catalog.archive_status', token=token)))
     return _private(redirect(link if mode == 'stream' else url_for('catalog.prepare_archive', token=token), code=303))
@@ -242,7 +246,7 @@ async def archive_status(token):
 @bp.route('/index/prepare/<string:token>')
 async def prepare_archive(token):
     ticket = await _archive_ticket(token)
-    link = url_for('catalog.download_archive', token=token, filename=f'GateStream-{ticket["section"]}.zip')
+    link = url_for('catalog.download_archive', token=token, filename=ticket.get('filename', f'GateStream-{ticket["section"]}.zip'))
     if ticket.get('mode') == 'stream':
         return redirect(link)
     state = archive_cache.status(token, archive_size(ticket['files']))
@@ -278,6 +282,8 @@ async def _archive_range(response, total):
 @bp.route('/index/archive/<string:token>/<string:filename>')
 async def download_archive(token, filename):
     ticket = await _archive_ticket(token)
+    from .main import download_client
+    name = ticket.get('filename', f'GateStream-{ticket["section"]}.zip')
     try:
         files = await selected_files(ticket['codes'], ticket['section'])
     except Exception:
@@ -293,11 +299,12 @@ async def download_archive(token, filename):
 
         length = archive_size(ticket['files'])
         body = None if request.method == 'HEAD' else activity.track_stream(
-            stream_archive(ticket['files'], download), length, f'zip:{token}')
+            stream_archive(ticket['files'], download), length, f'zip:{token}',
+            download=('zip', 0, length, download_client()))
         response = Response(body, content_type='application/zip')
         response.automatically_set_content_length = False
         response.headers.update({
-            'Content-Disposition': f'attachment; filename="GateStream-{ticket["section"]}.zip"',
+            'Content-Disposition': archive_disposition(name),
             'Content-Length': str(length), 'Accept-Ranges': 'none', 'X-Content-Type-Options': 'nosniff',
         })
         response.timeout = None
@@ -310,12 +317,13 @@ async def download_archive(token, filename):
         response.content_length = state['total']
         response.set_etag(f'gatestream-{token}')
         response.last_modified = ticket['expires_at'].replace(tzinfo=timezone.utc) - timedelta(seconds=ARCHIVE_AGE)
-        response.headers['Content-Disposition'] = f'attachment; filename="GateStream-{ticket["section"]}.zip"'
+        response.headers['Content-Disposition'] = archive_disposition(name)
         response.headers['X-Content-Type-Options'] = 'nosniff'
         bounds = await _archive_range(response, state['total'])
         if request.method == 'GET' and bounds is not None:
             response.response = response.iterable_body_class(activity.track_stream(
-                archive_cache.read(token, *bounds), response.content_length, f'zip:{token}'))
+                archive_cache.read(token, *bounds), response.content_length, f'zip:{token}',
+                download=('zip', bounds[0], state['total'], download_client())))
         response.timeout = None
         return response
     if state['state'] in ('queued', 'preparing'):
@@ -323,7 +331,8 @@ async def download_archive(token, filename):
     if state['state'] != 'ready':
         abort(410, 'The prepared ZIP is no longer available. Select the files again.')
     response = await send_file(archive_cache.path(token), mimetype='application/zip',
-        as_attachment=True, attachment_filename=f'GateStream-{ticket["section"]}.zip')
+        as_attachment=True, attachment_filename=ticket.get('filename', f'GateStream-{ticket["section"]}.zip'))
+    response.headers['Content-Disposition'] = archive_disposition(name)
     bounds = await _archive_range(response, state['total'])
     if bounds is not None:
         await response.response.make_conditional(*bounds)
@@ -337,6 +346,7 @@ async def download_archive(token, filename):
                 async for chunk in source:
                     yield chunk
 
-        response.response = response.iterable_body_class(activity.track_stream(chunks(), response.content_length, f'zip:{token}'))
+        response.response = response.iterable_body_class(activity.track_stream(chunks(), response.content_length, f'zip:{token}',
+            download=('zip', bounds[0], state['total'], download_client())))
     response.timeout = None
     return response
