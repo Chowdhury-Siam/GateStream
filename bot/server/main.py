@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 from contextlib import aclosing
 from logging import getLogger
 from quart import Blueprint, Response, request, render_template, jsonify
@@ -78,6 +79,11 @@ async def security_and_bot_check():
 
 # ==================== STREAM & DOWNLOAD ROUTES ====================
 
+def download_client():
+    # No raw IP/agent retained; don't trust forwarded headers supplied by clients.
+    return hashlib.sha256(f'{request.remote_addr}|{request.headers.get("User-Agent", "")}'.encode()).digest()
+
+
 @bp.route('/dl/<string:file_code>')
 async def transmit_file(file_code, range_allowed=True, parallel=False, internal=False):
     # Lookup file record in MongoDB
@@ -122,7 +128,7 @@ async def transmit_file(file_code, range_allowed=True, parallel=False, internal=
         range_match = re_match(r'bytes=(\d+)-(\d*)', range_header)
         if range_match:
             start = int(range_match.group(1))
-            end = int(range_match.group(2)) if range_match.group(2) else file_size - 1
+            end = min(int(range_match.group(2)), file_size - 1) if range_match.group(2) else file_size - 1
             if start > end or start >= file_size:
                 abort(416, 'Requested range not satisfiable')
         else:
@@ -504,7 +510,8 @@ async def transmit_file(file_code, range_allowed=True, parallel=False, internal=
         response.automatically_set_content_length = False
         response.headers.update(headers)
         return response
-    body = file_stream() if internal else activity.track_stream(file_stream(), content_length, file_code)
+    body = file_stream() if internal else activity.track_stream(file_stream(), content_length, file_code,
+        download=None if is_streaming else ('single', start, file_size, download_client()))
     return Response(body, headers=headers, status=status_code)
 
 @bp.route('/stream/<string:file_code>')
