@@ -74,3 +74,30 @@ async def stream_archive(files, download):
                 yield sink.chunks.popleft()
     while sink.chunks:
         yield sink.chunks.popleft()
+
+
+def archive_filename(value, section='index'):
+    """A display name only; cache paths always use the random ticket token."""
+    import unicodedata
+    name = unicodedata.normalize('NFC', value or '').strip()
+    if len(name) > 120 or len(name.encode('utf-8')) > 240:
+        raise ValueError('That ZIP name is too long. Try a shorter name, without the extension.')
+    name = ''.join(c for c in name if not unicodedata.category(c).startswith('C'))
+    name = re.sub(r'[<>:"/\\|?*]', '_', name).strip(' .')
+    while name.lower().endswith('.zip'):
+        name = name[:-4].rstrip(' .')
+    if not name:
+        name = f'GateStream-{section}'
+    if name.split('.')[0].upper() in {'CON', 'PRN', 'AUX', 'NUL', *(f'COM{i}' for i in range(1,10)), *(f'LPT{i}' for i in range(1,10))}:
+        name = '_' + name
+    return name + '.zip'
+
+
+def archive_disposition(name):
+    from urllib.parse import quote
+    from werkzeug.datastructures import Headers
+    from werkzeug.utils import secure_filename
+    headers = Headers()
+    headers.set('Content-Disposition', 'attachment', filename=name if name.isascii() else (secure_filename(name) or 'download.zip'),
+                **{'filename*': "UTF-8''" + quote(name, safe='')})
+    return headers['Content-Disposition']
