@@ -23,19 +23,16 @@ Extract the ZIP and upload the **contents** of its project folder, so `README.md
 **Deploy the bot:** [Hugging Face guide](HUGGING_FACE.md) or the local/Docker steps below.
 **Deploy the edge proxy:** [Cloudflare guide](CLOUDFLARE.md), included in the GitHub package.
 **Change the Telegram profile:** [Branding guide](BRANDING.md).
-**Bot settings:** Send `/bset` as the owner; `/dset` opens Drive setup. [Settings guide](BOT_SETTINGS.md).
-**Mirror or clone to Google Drive:** [Google Drive setup](GOOGLE_DRIVE.md), optional and disabled by default.
 
 ## What you can do
 
 - **Index your channels.** Add one file with `/link`, or an episode range with `/batch`.
 - **Browse two file categories.** `/index` is public for indexed batches and episodes; the **Link** tab protects single-file links with a password. Select multiple files and download one ZIP. Initial Link password: `Siam`; the owner changes it with `/setpassword <new password>`.
 - **Find your media.** Search movies, anime, series, and direct files from Telegram.
-- **Follow transfers live.** The home page shows active links, HTTP connections, Drive downloads/uploads, byte counts, progress, speed, elapsed time and ETA.
+- **Follow transfers live.** The home page shows active links, HTTP connections, byte counts, progress, speed, elapsed time and ETA.
 - **Watch your way.** Play in the browser, resume playback, or open VLC or MX Player.
 - **Share a link.** Create stream, download, and API URLs; revoke access by removing a link.
 - **Manage the library.** Inspect server stats, backfill durations, and back up or restore records.
-- **Mirror and clone to Drive.** Admins can use `/mirror <direct-url>` or `/clone <drive-link>` and receive Google Drive / optional Bhadoo index links. Existing `/drive` aliases still work; enable only on permitted hosting.
 - **Add an edge entry point.** Deploy the optional Cloudflare streaming reverse proxy from GitHub Actions.
 
 Media remains in Telegram. Selected opening and ending chunks are cached on
@@ -85,7 +82,7 @@ do not upload a filled `.env` file.
 | `MULTI_BOT_TOKENS` | No | Additional bot tokens, separated by spaces or commas |
 | `AUTH_USERS` | No | Additional administrator IDs |
 | `ALLOWED_USER_IDS` | No | Telegram users allowed to issue commands; blank allows everyone |
-| `TELEGRAM_CHANNEL_ID` | No | Storage channel for files uploaded directly to the bot |
+| `TELEGRAM_CHANNEL_ID` | No | Storage channel for direct uploads and first-start user notices |
 | `TELEGRAM_BOT_USERNAME` | No | Username fallback; detected from the bot when connected |
 | `OMNI_MONGO_URI` | No | Compatibility setting for a separate upstream catalog |
 | `PORT` | No | `8080` locally; `7860` in the Docker image and on Spaces |
@@ -128,12 +125,6 @@ Cloudflare guide for all settings and the deployment steps.
 | `/catalog`, `/index` without arguments | Open public Index and protected Link files |
 | `/setpassword <new password>` | Owner only: change the shared Link password and invalidate existing sessions |
 | `/privacy` | Explain stored data and link access |
-| `/bset`, `/botsettings` | Owner-only stacked settings menu; persistent runtime config and private token upload |
-| `/dset`, `/driveset` | Owner-only Google Drive setup menu |
-| `/cancelsettings` | Cancel a pending settings reply |
-| `/drive <url>`, `/mirror <url>` | Admin-only: mirror a direct file URL to Google Drive; Drive URLs automatically clone |
-| `/clone <drive-link>` | Admin-only: server-side copy a Drive file or folder tree |
-| `/drivestatus`, `/canceldrive` | Admin-only: inspect or cancel the current Drive job |
 
 Administrator commands include `/stats`, `/workers`, `/log`, `/sync_duration`,
 `/set_title`, `/revoke`, `/clean`, `/backup`, `/restore`, `/purge`, `/restart`,
@@ -147,20 +138,6 @@ Automatic channel indexing: add the bot as an admin and send the latest post lin
 /index @YourChannel
 /cancelindex
 ```
-
-### Optional Google Drive settings
-
-See [GOOGLE_DRIVE.md](GOOGLE_DRIVE.md) for token setup, limits and hosting requirements.
-
-| Setting | Default | Purpose |
-| --- | --- | --- |
-| `DRIVE_ENABLED` | `false` | Enable admin-only Drive transfers on permitted hosting |
-| `DRIVE_TOKEN_PATH` | `token.pickle` | Path to an owner-provided OAuth token file |
-| `DRIVE_TOKEN_PICKLE_B64` | Empty | Host Secret containing the token encoded as base64; takes precedence over the file |
-| `DRIVE_FOLDER_ID` | Empty | Destination folder ID; blank uses My Drive root |
-| `DRIVE_INDEX_URL` | Empty | Optional HTTPS Bhadoo folder URL corresponding exactly to the destination |
-| `DRIVE_CLONE_MAX_FILES` | `1000` | Maximum files + folders per clone snapshot, including the root |
-| `DRIVE_MAX_MB` | `1024` | Maximum downloaded file size in MiB |
 
 ## HTTP endpoints
 
@@ -341,15 +318,14 @@ results remain Direct files. See [CHANNEL_INDEX.md](CHANNEL_INDEX.md).
 ## Live activity dashboard
 
 The compact home page shows separate **Single files downloaded** and **ZIPs
-downloaded** totals, with live bandwidth/Drive cards in an expandable panel.
+downloaded** totals, with live bandwidth cards in an expandable panel.
 New totals begin with this update: previous aggregate HTTP request counters
 cannot reconstruct how many entire files were downloaded. Completion means
 all resource bytes were handed to completed response streams. It is not proof
 that the client saved the file to disk. HEAD, inline playback, ZIP building and
 range probes do not increment these new totals; overlapping HTTP ranges for
 the same anonymous client/resource are combined. A ZIP counts once, not once
-per selected file or range connection. Downloads served by an external Drive
-index do not pass through GateStream and are not included in these totals.
+per selected file or range connection. 
 
 In-flight range coverage is kept in memory for up to 24 hours and 1024 anonymous
 client/resource pairs (at most 256 disjoint ranges each). It resets on restart,
@@ -362,9 +338,8 @@ the same five-second MongoDB checkpoint as existing counters.
 
 Open the server or Worker home page to follow transfers live. The dashboard
 refreshes every two seconds while visible and slows polling in background tabs.
-Media links are counted separately from HTTP range connections. It shows Drive
-downloading/uploading counts, downloaded and uploaded bytes, data sent to viewers,
-completed requests, failures, incomplete transfers and server uptime.
+Media links are counted separately from HTTP range connections. It shows data
+sent to viewers, completed requests, failures, incomplete transfers and server uptime.
 
 Active rows show progress, transferred/total bytes, average speed, elapsed time
 and ETA. Unknown-size downloads use an indeterminate progress bar. Summary
@@ -373,7 +348,7 @@ all active transfers are included in the counters. On a network failure the
 previous values stay dimmed and the panel shows disconnected until it reconnects.
 
 The public endpoint exposes aggregate counts and anonymous activity numbers,
-without file names, URLs, file codes, Drive IDs, credentials or user IDs.
+without file names, URLs, file codes, credentials or user IDs.
 Cumulative bytes, completed counts and failed/incomplete counts are stored in
 MongoDB `analytics`, document `transfer_activity`. They are restored at startup,
 checkpointed every five seconds, and flushed during normal web shutdown and
@@ -388,21 +363,26 @@ without adding totals twice, and the dashboard shows a save/restore warning.
 Chunks never wait for statistics database writes. Use the same `DATABASE_URL`
 and `DATABASE_NAME` to preserve totals. This uses one writer per deployment;
 it does not aggregate multiple replicas. Existing media bytes can be seeded
-from the older `analytics.bandwidth` record on first upgrade. Historical Drive
+from the older `analytics.bandwidth` record on first upgrade. Historical
 counts and other totals that were never saved cannot be reconstructed. The
 media-only `/backup` export does not include these analytics records; a full
 database backup does.
 
-Media byte totals measure
-bytes handed to HTTP responses, not proof a client saved a whole file. Drive
-upload bytes are acknowledged chunks; successful uploads are size-verified.
-Failed/incomplete transfers retain their partial byte totals. The existing
-one-at-a-time Drive limit still applies; no transfer queue has been added.
+Media byte totals measure bytes handed to HTTP responses, not proof a client
+saved a whole file. Failed/incomplete transfers retain their partial byte totals.
+Legacy checkpoint categories are retained for compatibility; their historical
+values are not erased and are not shown as active features on the home page.
 
 ## Upgrading an existing deployment
 
 1. Back up the database with `/backup` and retain your current hosting settings.
-2. Replace the source files with the contents of the appropriate GateStream ZIP.
+2. Use a clean source directory from the appropriate ZIP. When upgrading an
+   existing checkout, remove retired files `bot/plugins/drive.py`,
+   `bot/modules/drive.py`, `tests/test_drive.py`, and `GOOGLE_DRIVE.md`. If v2.0.8
+   was deployed, also remove `bot/plugins/settings.py`,
+   `bot/modules/runtime_settings.py`, `tests/test_bot_settings.py`, and
+   `BOT_SETTINGS.md`. Do not remove your database, Telegram session files or
+   cached archives that are still needed for resume.
 3. Keep the current database names, bot tokens, and Worker name, then restart the host.
 4. Test `/health`, generate a file link, and check playback and seeking.
 
@@ -435,14 +415,47 @@ and do not need live Telegram or MongoDB connections.
 GateStream is Siam's rebrand of the supplied OmniArchiver-F2L project.
 Original upstream attribution is preserved in [ACKNOWLEDGEMENTS.md](ACKNOWLEDGEMENTS.md).
 
-## Settings inside Telegram (2.0.8)
+## v2.0.9 — v2.0.7 base with Drive integration removed
 
-Open `/bset` in the owner's private chat for Config Variables, Module Settings,
-Google Drive, Private Files and Status buttons. `/dset` opens Drive setup.
-Upload your own OAuth `token.json` in the prompted private reply, choose its
-destination and optional index URL, check access, then enable transfers. The
-existing host token.pickle settings remain supported. Private values are encrypted
-in the current MongoDB settings collection; runtime overrides restore before
-the bot starts accepting commands. Host identity/database settings and HF
-metadata are preserved. Read [BOT_SETTINGS.md](BOT_SETTINGS.md) for supported
-variables, token conversion, encryption-key rotation and input/privacy limits.
+This release starts from the v2.0.7 source ZIPs. It removes every Google Drive
+transfer command (`/drive`, `/gdrive`, `/mirror`, `/clone`, `/drivestatus`,
+`/canceldrive`), credential loader, Drive configuration variable, Google API
+dependency and Bhadoo index button. The v2.0.8 owner settings module is not part
+of this v2.0.7-based package. The bot imports an explicit list of active plugins,
+so retired plugins left by an overlay upload cannot register old commands.
+
+Custom ZIP names, compact Library/Private links pages, separate persistent
+single-file/ZIP delivery totals, resumable and parallel ZIP sources, indexing,
+classification and existing database settings are retained. The home dashboard
+now shows file-download activity only. Existing credentials or historical data
+in external secrets/database storage are not deleted or used by this release;
+remove unused host credential secrets separately if desired.
+
+Removing these features does not establish why an account was locked and does
+not guarantee hosting approval or account reinstatement. Telegram streaming
+and public downloads still require a host that permits the workload.
+
+
+## v2.0.10 — New-user channel notices
+
+Set the existing `TELEGRAM_CHANNEL_ID` to the destination channel and give the
+bot permission to post there. An allowed user's first private `/start` sends
+their Telegram-provided first/last name, user ID, username/profile link, language,
+Premium/verified/bot/restricted/scam/fake/deleted flags, available DC ID and
+first-start time (UTC). The welcome and `/privacy` explain the notice. The bot
+does not request or collect phone numbers, IP addresses, locations or contacts.
+Use a private channel if these notices should only be visible to administrators.
+
+The existing MongoDB database gains a `bot_users` collection containing only the
+user ID, first-start time and notice delivery state. Repeated `/start`, `/help`
+and normal restarts do not resend a successfully recorded notice. Existing users
+are considered new on their first `/start` after this upgrade because older
+versions did not record starts. No notice is sent when the channel is unset.
+
+Channel or database errors do not block the welcome; failed notices retry on
+the user's next `/start`. A two-minute claim prevents concurrent duplicate
+notices and expires after a crash. A crash/timeout between Telegram accepting
+a notice and MongoDB recording success can still cause a repeat on retry.
+The bot must have posting permission; delivery has been tested with mocks,
+not a live channel. All Drive functionality remains removed. Existing database
+names, hosting settings and resumable streaming behavior are unchanged.
