@@ -23,7 +23,8 @@ Extract the ZIP and upload the **contents** of its project folder, so `README.md
 **Deploy the bot:** [Hugging Face guide](HUGGING_FACE.md) or the local/Docker steps below.
 **Deploy the edge proxy:** [Cloudflare guide](CLOUDFLARE.md), included in the GitHub package.
 **Change the Telegram profile:** [Branding guide](BRANDING.md).
-**Transfer a direct file to Drive:** [Google Drive setup](GOOGLE_DRIVE.md), optional and disabled by default.
+**Bot settings:** Send `/bset` as the owner; `/dset` opens Drive setup. [Settings guide](BOT_SETTINGS.md).
+**Mirror or clone to Google Drive:** [Google Drive setup](GOOGLE_DRIVE.md), optional and disabled by default.
 
 ## What you can do
 
@@ -34,7 +35,7 @@ Extract the ZIP and upload the **contents** of its project folder, so `README.md
 - **Watch your way.** Play in the browser, resume playback, or open VLC or MX Player.
 - **Share a link.** Create stream, download, and API URLs; revoke access by removing a link.
 - **Manage the library.** Inspect server stats, backfill durations, and back up or restore records.
-- **Send a direct file to Drive.** Admins can use `/drive <url>` with a trusted OAuth `token.pickle`; enable only on hosting that permits file transfers.
+- **Mirror and clone to Drive.** Admins can use `/mirror <direct-url>` or `/clone <drive-link>` and receive Google Drive / optional Bhadoo index links. Existing `/drive` aliases still work; enable only on permitted hosting.
 - **Add an edge entry point.** Deploy the optional Cloudflare streaming reverse proxy from GitHub Actions.
 
 Media remains in Telegram. Selected opening and ending chunks are cached on
@@ -127,7 +128,12 @@ Cloudflare guide for all settings and the deployment steps.
 | `/catalog`, `/index` without arguments | Open public Index and protected Link files |
 | `/setpassword <new password>` | Owner only: change the shared Link password and invalidate existing sessions |
 | `/privacy` | Explain stored data and link access |
-| `/drive <url>` | Admin-only: download a direct file URL and upload it to Google Drive when enabled |
+| `/bset`, `/botsettings` | Owner-only stacked settings menu; persistent runtime config and private token upload |
+| `/dset`, `/driveset` | Owner-only Google Drive setup menu |
+| `/cancelsettings` | Cancel a pending settings reply |
+| `/drive <url>`, `/mirror <url>` | Admin-only: mirror a direct file URL to Google Drive; Drive URLs automatically clone |
+| `/clone <drive-link>` | Admin-only: server-side copy a Drive file or folder tree |
+| `/drivestatus`, `/canceldrive` | Admin-only: inspect or cancel the current Drive job |
 
 Administrator commands include `/stats`, `/workers`, `/log`, `/sync_duration`,
 `/set_title`, `/revoke`, `/clean`, `/backup`, `/restore`, `/purge`, `/restart`,
@@ -152,6 +158,8 @@ See [GOOGLE_DRIVE.md](GOOGLE_DRIVE.md) for token setup, limits and hosting requi
 | `DRIVE_TOKEN_PATH` | `token.pickle` | Path to an owner-provided OAuth token file |
 | `DRIVE_TOKEN_PICKLE_B64` | Empty | Host Secret containing the token encoded as base64; takes precedence over the file |
 | `DRIVE_FOLDER_ID` | Empty | Destination folder ID; blank uses My Drive root |
+| `DRIVE_INDEX_URL` | Empty | Optional HTTPS Bhadoo folder URL corresponding exactly to the destination |
+| `DRIVE_CLONE_MAX_FILES` | `1000` | Maximum files + folders per clone snapshot, including the root |
 | `DRIVE_MAX_MB` | `1024` | Maximum downloaded file size in MiB |
 
 ## HTTP endpoints
@@ -200,18 +208,27 @@ listing. New records also store their section explicitly. Media category filters
 (Movies, Anime, Web series, Direct files), filename/batch-title search and
 pagination work within each tab, with 30 files per page.
 
-Select individual checkboxes or **Select this page**, then press **Download
-selected** to receive up to 30 files in one ZIP. Selection applies to the current
+Select individual checkboxes or **Select all on page**, optionally enter a
+**ZIP name** without its extension, then press **Download ZIP** to receive up to 30 files in one ZIP. Selection applies to the current
 page; changing the page or filters resets it. The server checks every selected
 code against its section, so a public ZIP request cannot include private Link
 records. ZIP64 supports large files.
 
-Version 2.0.6 offers two choices before downloading selected files:
+Version 2.0.7 retains two choices before downloading selected files:
 
 | Option | Starts | Resume and multiple connections |
 | --- | --- | --- |
 | **Start immediately** (default) | Sends available ZIP bytes while the shared archive is still being built | Yes; later ranges wait for their bytes |
-| **Prepare with resume** | Waits for the complete temporary ZIP, showing progress | Yes, with all ranges ready |
+| **Prepare first** | Waits for the complete temporary ZIP, showing progress | Yes, with all ranges ready |
+
+The compact Library / Private links controls accept a custom ZIP name before
+starting either mode. `.zip` is appended automatically (pasting the extension
+also works), Unicode names are supported, and unsafe filename characters are
+removed/replaced. Blank uses the previous `GateStream-index.zip` /
+`GateStream-link.zip` default. A name is at most 120 characters and 240 UTF-8
+bytes before the extension. The canonical name is stored in the download ticket
+and used for GET, HEAD, resume/ranges and prepared redirects. It never becomes
+a local cache path. Existing download links remain valid.
 
 Immediate mode now writes one shared temporary ZIP in the background. The first
 connection can read the opening bytes before the ZIP finishes; concurrent range
@@ -245,7 +262,7 @@ but cannot guarantee constant bandwidth or remove Telegram/hosting limits. GET l
 section and password-revocation rules. Older streaming links remain single
 connection; make a new selection to use the live range support.
 
-The following completed-file details apply to **Prepare with resume**.
+The following completed-file details apply to **Prepare first**.
 
 Selected files are prepared into one temporary, uncompressed ZIP before the
 client download starts. The page shows queued/preparing progress and
@@ -323,6 +340,26 @@ results remain Direct files. See [CHANNEL_INDEX.md](CHANNEL_INDEX.md).
 
 ## Live activity dashboard
 
+The compact home page shows separate **Single files downloaded** and **ZIPs
+downloaded** totals, with live bandwidth/Drive cards in an expandable panel.
+New totals begin with this update: previous aggregate HTTP request counters
+cannot reconstruct how many entire files were downloaded. Completion means
+all resource bytes were handed to completed response streams. It is not proof
+that the client saved the file to disk. HEAD, inline playback, ZIP building and
+range probes do not increment these new totals; overlapping HTTP ranges for
+the same anonymous client/resource are combined. A ZIP counts once, not once
+per selected file or range connection. Downloads served by an external Drive
+index do not pass through GateStream and are not included in these totals.
+
+In-flight range coverage is kept in memory for up to 24 hours and 1024 anonymous
+client/resource pairs (at most 256 disjoint ranges each). It resets on restart,
+so a download resumed across a server restart may not count as a new completion.
+Client grouping uses a non-public hash of connection address and user agent;
+clients sharing both may be grouped. New range sequences starting at byte zero
+after a ten-second completion grace can count again. These are server-side
+delivery totals, not exact per-person analytics. Completed totals persist using
+the same five-second MongoDB checkpoint as existing counters.
+
 Open the server or Worker home page to follow transfers live. The dashboard
 refreshes every two seconds while visible and slows polling in background tabs.
 Media links are counted separately from HTTP range connections. It shows Drive
@@ -397,3 +434,15 @@ and do not need live Telegram or MongoDB connections.
 
 GateStream is Siam's rebrand of the supplied OmniArchiver-F2L project.
 Original upstream attribution is preserved in [ACKNOWLEDGEMENTS.md](ACKNOWLEDGEMENTS.md).
+
+## Settings inside Telegram (2.0.8)
+
+Open `/bset` in the owner's private chat for Config Variables, Module Settings,
+Google Drive, Private Files and Status buttons. `/dset` opens Drive setup.
+Upload your own OAuth `token.json` in the prompted private reply, choose its
+destination and optional index URL, check access, then enable transfers. The
+existing host token.pickle settings remain supported. Private values are encrypted
+in the current MongoDB settings collection; runtime overrides restore before
+the bot starts accepting commands. Host identity/database settings and HF
+metadata are preserved. Read [BOT_SETTINGS.md](BOT_SETTINGS.md) for supported
+variables, token conversion, encryption-key rotation and input/privacy limits.
