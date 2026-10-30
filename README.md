@@ -459,3 +459,28 @@ a notice and MongoDB recording success can still cause a repeat on retry.
 The bot must have posting permission; delivery has been tested with mocks,
 not a live channel. All Drive functionality remains removed. Existing database
 names, hosting settings and resumable streaming behavior are unchanged.
+
+
+## v2.0.11 — Visible ZIP preparation progress
+
+ZIP creation now has separate checking/queued/preparing/ready states. While the
+server creates a link, an indeterminate bar shows that no byte progress has
+arrived yet. Once preparation starts, the page displays a progress bar, percent,
+prepared bytes / total ZIP size, and source preparation speed when available.
+Progress refreshes every two seconds in Prepare first mode. Start immediately
+shows the same byte progress alongside its existing buffer status. Preparation
+progress measures the ZIP being built on the server, not bytes downloaded by
+the browser. A source stall can leave the percentage unchanged.
+
+Selection queries filter matching documents before expanding batch episodes
+and no longer sort the whole catalog; section access checks remain in place.
+Network status timeouts retry, and failed link creation shows a clear error.
+The short link-creation request has a 25-second server deadline so a stalled
+request cannot silently wait for several minutes behind the Worker. ZIP building
+continues separately and is not limited to 25 seconds.
+The no-JavaScript preparation page also displays prepared/total sizes.
+
+Checks: `node --test tests/catalog_progress.test.cjs` in either package, plus
+the existing Python suite and the GitHub package's Worker tests. Live host
+performance has not been measured. User notices and the complete Drive removal
+remain intact; database settings and Hugging Face README metadata are unchanged.
