@@ -267,7 +267,7 @@ async def transmit_file(file_code, range_allowed=True, parallel=False, internal=
                     client = get_worker_client() or TelegramBot
                     name = getattr(client, 'name', 'bot')
                     try:
-                        msg = await get_message(channel_id, message_id, client=client, force_refresh=retries > 0)
+                        msg = await get_message(channel_id, message_id, client=client, force_refresh=retries > 0, allow_fallback=False)
                         if not msg:
                             raise IOError('Telegram message unavailable')
                         async with aclosing(range_stream(client, msg, first + received, count - received)) as stream:
@@ -332,7 +332,7 @@ async def transmit_file(file_code, range_allowed=True, parallel=False, internal=
                     worker = get_worker_client() or TelegramBot
                     w_name = getattr(worker, 'name', 'bot')
                     try:
-                        msg = await get_message(channel_id, message_id, client=worker)
+                        msg = await get_message(channel_id, message_id, client=worker, force_refresh=attempt > 0, allow_fallback=False)
                         if not msg and worker != TelegramBot:
                             worker = TelegramBot
                             w_name = 'TelegramBot'
@@ -444,7 +444,7 @@ async def transmit_file(file_code, range_allowed=True, parallel=False, internal=
                     worker_name = getattr(worker_client, 'name', 'bot')
 
                     try:
-                        msg = await get_message(channel_id, message_id, client=worker_client)
+                        msg = await get_message(channel_id, message_id, client=worker_client, force_refresh=retry_count > 0, allow_fallback=False)
                         if not msg and worker_client != TelegramBot:
                             worker_client = TelegramBot
                             worker_name = 'TelegramBot'
