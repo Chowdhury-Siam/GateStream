@@ -106,6 +106,8 @@ async def start_all_clients():
     # Connect MongoDB
     db.connect()
     await db.db.command('ping')
+    from bot.modules.runtime_settings import load as load_runtime_settings
+    await load_runtime_settings()
     from bot.modules.activity_store import activity_store
     await activity_store.flush()
     
