@@ -60,7 +60,7 @@ class Telegram:
     # Allowed Users for general usage (empty = everyone allowed)
     ALLOWED_USER_IDS = env.get("ALLOWED_USER_IDS", "").split()
     
-    # Optional Storage / Bin Channel ID (Only needed if you upload files directly in private DM)
+    # Optional storage / bin channel and destination for first-start user notices
     CHANNEL_ID = _get_int(env.get("TELEGRAM_CHANNEL_ID", env.get("CHANNEL_ID", env.get("BIN_CHANNEL_ID", 0))), 0)
     SECRET_CODE_LENGTH = _get_int(env.get("SECRET_CODE_LENGTH", 24), 24)
 
@@ -87,16 +87,6 @@ class Server:
 class Metadata:
     MAL_CLIENT_ID = env.get('MAL_CLIENT_ID', '').strip()
     OMDB_API_KEY = env.get('OMDB_API_KEY', '').strip()
-
-
-class Drive:
-    ENABLED = env.get("DRIVE_ENABLED", "false").lower() in ("1", "true", "yes")
-    TOKEN_PATH = env.get("DRIVE_TOKEN_PATH", "token.pickle")
-    TOKEN_PICKLE_B64 = env.get("DRIVE_TOKEN_PICKLE_B64", "")
-    FOLDER_ID = env.get("DRIVE_FOLDER_ID", "").strip()
-    MAX_BYTES = _get_int(env.get("DRIVE_MAX_MB", 1024), 1024) * 1024 * 1024
-    INDEX_URL = env.get("DRIVE_INDEX_URL", "").strip()
-    CLONE_MAX_FILES = _get_int(env.get("DRIVE_CLONE_MAX_FILES", 1000), 1000)
 
 
 def validate_config():
