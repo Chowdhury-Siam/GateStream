@@ -23,6 +23,9 @@
     input[type="checkbox"] { width:19px; height:19px; padding:0; accent-color:#d6ad60; flex-shrink:0; }
     button:disabled { opacity:.45; cursor:default; }
     .bulk .muted { flex-basis:100%; }
+    .zip-progress { flex-basis:100%; min-width:0; }
+    .zip-progress progress { display:block; width:100%; height:7px; margin:2px 0 7px; accent-color:#d6ad60; }
+    .zip-progress span { display:block; color:#c9c5b9; font-size:12px; overflow-wrap:anywhere; }
     .zip-settings { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:8px 10px; flex-basis:100%; }
     .zip-settings label { display:block; font-size:12px; margin:0 0 5px; cursor:default; }
     .zip-settings > div { min-width:0; }
@@ -122,6 +125,7 @@
         </div>
         <button id="download-selected" type="submit" disabled>Download ZIP (0)</button>
         <span id="selection-count" role="status" aria-live="polite">0 selected</span>
+        <div id="zip-progress" class="zip-progress" hidden><progress id="zip-progress-bar" max="100" aria-label="ZIP preparation"></progress><span id="zip-progress-detail" role="status" aria-live="polite"></span></div>
         <span class="muted">Up to {{ page_size }} files per ZIP · this page only</span>
       </div>{% endif %}
     <div id="zip-ready" class="bulk" hidden><a id="zip-url" class="button" download>Download ZIP</a><button id="copy-zip" class="ghost" type="button">Copy download link</button><span id="zip-note" class="muted"></span><span id="zip-source" class="muted" role="status" aria-live="polite"></span></div>
@@ -143,16 +147,42 @@
     const download = document.getElementById('download-selected');
     let preparing = false;
     let zipMonitor = 0;
+    function zipSize(bytes) {
+      const value = Math.max(0, Number(bytes) || 0);
+      if (value < 1024) return `${Math.floor(value)} B`;
+      const units = ['KiB', 'MiB', 'GiB', 'TiB'];
+      const power = Math.min(units.length, Math.floor(Math.log2(value) / 10));
+      return `${(value / 1024 ** power).toFixed(2)} ${units[power - 1]}`;
+    }
+    function showZipProgress(progress) {
+      const total = Math.max(0, Number(progress.total) || 0);
+      const bytes = Math.min(total, Math.max(0, Number(progress.bytes) || 0));
+      const percent = progress.state === 'ready' ? 100 : Math.min(99, Math.floor(100 * bytes / (total || 1)));
+      const bar = document.getElementById('zip-progress-bar');
+      bar.value = percent;
+      document.getElementById('zip-progress').hidden = false;
+      const stage = progress.state === 'queued' ? 'Queued' : progress.state === 'ready' ? 'ZIP ready' : 'Prepared';
+      const speed = Math.max(0, Number(progress.source_speed_bps) || 0);
+      document.getElementById('zip-progress-detail').textContent = `${stage} ${percent}% · ${zipSize(bytes)} / ${zipSize(total)}${speed > 0 && progress.state !== 'ready' ? ` · ${zipSize(speed)}/s` : ''}`;
+      return percent;
+    }
+    async function zipFetch(url, options = {}, timeout = 20000) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeout);
+      try { return await fetch(url, {...options, signal:controller.signal}); }
+      finally { clearTimeout(timer); }
+    }
     async function monitorLiveZip(url, generation) {
       const label = document.getElementById('zip-source');
       while (generation === zipMonitor) {
         try {
-          const response = await fetch(url, {cache:'no-store'});
+          const response = await zipFetch(url, {cache:'no-store'});
           if (generation !== zipMonitor) return;
           if (response.status === 410) { label.textContent = 'ZIP buffer unavailable. Create a new selection if the download stopped.'; return; }
           if (!response.ok) throw new Error('Buffer status temporarily unavailable');
           const progress = await response.json();
           if (generation !== zipMonitor) return;
+          showZipProgress(progress);
           if (progress.state === 'ready') { label.textContent = 'ZIP fully buffered. All byte ranges are ready.'; return; }
           label.textContent = `ZIP buffer: ${Math.floor(100 * progress.bytes / progress.total)}% · Fill rate: ${(Number(progress.source_speed_bps || 0) / 1048576).toFixed(2)} MiB/s`;
         } catch {
@@ -166,6 +196,7 @@
       if (!all) return;
       zipMonitor++;
       document.getElementById('zip-ready').hidden = true;
+      document.getElementById('zip-progress').hidden = true;
       const count = choices.filter(input => input.checked).length;
       all.checked = count === choices.length;
       all.indeterminate = count > 0 && count < choices.length;
@@ -195,17 +226,35 @@
       document.getElementById('zip-mode').disabled = true;
       document.getElementById('zip-name').disabled = true;
       const status = document.getElementById('selection-count');
-      status.textContent = data.get('mode') === 'stream' ? 'Starting ZIP download…' : 'Preparing download link…';
+      status.textContent = 'Checking selected files…';
+      document.getElementById('zip-progress').hidden = false;
+      document.getElementById('zip-progress-bar').removeAttribute('value');
+      document.getElementById('zip-progress-detail').textContent = 'Creating your link. Preparation progress will appear here.';
+      const pending = setTimeout(() => {
+        status.textContent = 'Still checking selected files…';
+        document.getElementById('zip-progress-detail').textContent = 'Waiting for the server to create the ZIP link. No preparation progress received yet.';
+      }, 10000);
       try {
-        const response = await fetch(form.action, {method:'POST', body:data, headers:{Accept:'application/json'}});
-        if (!response.ok) throw new Error([400, 413].includes(response.status) ? await response.text() : 'Unable to prepare the download. Reload, sign in if needed, and try again.');
+        const response = await zipFetch(form.action, {method:'POST', body:data, headers:{Accept:'application/json'}}, 60000);
+        if (!response.ok) throw new Error([400, 409, 413, 503].includes(response.status) ? await response.text() : 'Unable to prepare the download. Reload, sign in if needed, and try again.');
         const result = await response.json();
+        clearTimeout(pending);
+        let failures = 0;
         while (result.mode !== 'stream') {
-          const check = await fetch(result.status_url, {cache:'no-store'});
+          let check;
+          try { check = await zipFetch(result.status_url, {cache:'no-store'}); }
+          catch (error) {
+            if (++failures >= 3) throw new Error('Cannot reach ZIP status. Preparation may still be running. Please try again when the connection recovers.');
+            status.textContent = 'Reconnecting to preparation status…';
+            await new Promise(resolve => setTimeout(resolve, 2000));
+            continue;
+          }
           if (!check.ok) throw new Error('ZIP preparation failed or the link expired. Select the files again to retry.');
           const progress = await check.json();
+          failures = 0;
+          const percent = showZipProgress(progress);
           if (progress.state === 'ready') break;
-          status.textContent = progress.state === 'queued' ? 'ZIP queued. Waiting to start…' : `Preparing ZIP… ${Math.floor(100 * progress.bytes / progress.total)}%`;
+          status.textContent = progress.state === 'queued' ? 'ZIP queued. Waiting to start…' : `Preparing ZIP… ${percent}%`;
           await new Promise(resolve => setTimeout(resolve, 2000));
         }
         const link = document.getElementById('zip-url');
@@ -219,8 +268,10 @@
         if (result.mode === 'stream') monitorLiveZip(result.status_url, generation);
         else document.getElementById('zip-source').textContent = 'ZIP fully buffered. All byte ranges are ready.';
       } catch (error) {
-        status.textContent = error.message;
+        status.textContent = error.name === 'AbortError' ? 'The server took too long to create the ZIP link. Please try again.' : error.name === 'TypeError' ? 'Connection to the server was lost. No preparation status is available. Please try again.' : error.message;
+        document.getElementById('zip-progress-detail').textContent = 'Progress updates stopped. ' + status.textContent;
       } finally {
+        clearTimeout(pending);
         preparing = false;
         choices.forEach(input => { input.disabled = false; });
         all.disabled = false;
