@@ -359,6 +359,61 @@ class IndexRouteTests(unittest.IsolatedAsyncioTestCase):
             ticket['archive_version'] = 0
             self.assertEqual((await self.client.get(link,scheme='https')).status_code,410)
 
+    async def test_prepare_first_returns_ticket_before_source_finishes_and_exposes_byte_progress(self):
+        from quart import Response
+        from bot.server import main
+        from bot.modules.static import get_human_size
+        entered, release = asyncio.Event(), asyncio.Event()
+        tickets = {}
+        async def insert(ticket): tickets[ticket['_id']] = ticket
+        storage = SimpleNamespace(insert_one=insert, find_one=AsyncMock(side_effect=lambda query: tickets.get(query['_id'])))
+        files = [dict(code='one', file_name='episode.mkv', file_size=65536)]
+        async def download(*args, **kwargs):
+            async def body():
+                yield b'a' * 32768
+                entered.set()
+                await release.wait()
+                yield b'b' * 32768
+            return Response(body(), headers={'Content-Length': '65536'})
+        form = dict(csrf=await self.csrf(), section='index', mode='prepare', code='one')
+        with patch.object(catalog.db, 'db', {'download_tickets': storage}), \
+             patch.object(catalog, 'selected_files', AsyncMock(return_value=files)), \
+             patch.object(main, 'transmit_file', download):
+            response = await asyncio.wait_for(self.client.post('/index/download', form=form,
+                headers={'Accept': 'application/json'}, scheme='https'), 1)
+            result = await response.get_json()
+            self.assertEqual(response.status_code, 200)
+            await asyncio.wait_for(entered.wait(), 1)
+            status = await self.client.get(result['status_url'], scheme='https')
+            progress = await status.get_json()
+            self.assertEqual(status.status_code, 202)
+            self.assertEqual(progress['state'], 'preparing')
+            self.assertGreaterEqual(progress['bytes'], 32768)
+            self.assertLess(progress['bytes'], progress['total'])
+            self.assertGreater(progress['source_speed_bps'], 0)
+            token = next(iter(tickets))
+            fallback = await self.client.get(f'/index/prepare/{token}', scheme='https')
+            html = await fallback.get_data(as_text=True)
+            self.assertIn(get_human_size(progress['bytes']), html)
+            self.assertIn(get_human_size(progress['total']), html)
+            self.assertIn('%', html)
+            release.set()
+            await asyncio.wait_for(self.zip_cache.jobs[token]['task'], 1)
+            ready = await (await self.client.get(result['status_url'], scheme='https')).get_json()
+            self.assertEqual(ready['state'], 'ready')
+            self.assertEqual(ready['bytes'], ready['total'])
+
+    async def test_stalled_link_creation_returns_retryable_error_instead_of_hanging(self):
+        timeout = asyncio.timeout
+        async def blocked(): await asyncio.Event().wait()
+        with patch.object(catalog, '_create_download', blocked), \
+             patch.object(catalog.asyncio, 'timeout', side_effect=lambda seconds: timeout(.01)):
+            response = await self.client.post('/index/download', scheme='https')
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.headers['Retry-After'], '3')
+        self.assertIn('could not create your ZIP link in time', await response.get_data(as_text=True))
+        self.assertIn('no-store', response.headers['Cache-Control'])
+
     async def test_live_http_ranges_resume_before_and_after_archive_completion(self):
         from datetime import datetime, timedelta, timezone
         from quart import Response
@@ -468,6 +523,24 @@ class IndexRouteTests(unittest.IsolatedAsyncioTestCase):
             response = await self.client.get('/index?section=link', scheme='https')
             listing.assert_not_awaited()
         self.assertIn('Private links', await response.get_data(as_text=True))
+
+
+class SelectionQueryTests(unittest.IsolatedAsyncioTestCase):
+    async def test_selection_is_filtered_before_batch_expansion_without_sorting_or_losing_section_checks(self):
+        from bot.database import catalog as listing
+        cursor = SimpleNamespace(to_list=AsyncMock(return_value=[{'code': 'two'}, {'code': 'one'}]))
+        collection = SimpleNamespace(aggregate=MagicMock(return_value=cursor))
+        with patch.multiple(listing.db, movies=collection, anime=None, webseries=None, direct_files=None):
+            for section in ('index', 'link'):
+                result = await listing.selected_files(['one', 'two'], section)
+                self.assertEqual([item['code'] for item in result], ['one', 'two'])
+                pipeline = collection.aggregate.call_args.args[0]
+                self.assertIn({'episodes.code': {'$in': ['one', 'two']}}, pipeline[0]['$match']['$or'])
+                unwind = next(i for i, stage in enumerate(pipeline) if '$unwind' in stage)
+                self.assertGreater(unwind, 1)
+                self.assertEqual(pipeline[1], listing._pipeline('movies', '', section)[0])
+                self.assertIn({'$match': {'code': {'$in': ['one', 'two']}}}, pipeline[unwind + 1:])
+                self.assertFalse(any('$sort' in stage for stage in pipeline))
 
 
 class OwnerPasswordTests(unittest.IsolatedAsyncioTestCase):
