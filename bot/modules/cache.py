@@ -59,7 +59,10 @@ async def prefetch_chunk(file_code: str, chunk_idx: int, total_chunks: int, targ
         worker = get_worker_client() or TelegramBot
         msg = target_msg
         if channel_id and message_id:
-            msg = await get_message(channel_id, message_id, client=worker) or target_msg
+            msg = await get_message(channel_id, message_id, client=worker, allow_fallback=False)
+            if not msg and worker != TelegramBot:
+                worker = TelegramBot
+                msg = await get_message(channel_id, message_id, client=worker, allow_fallback=False)
 
         if not msg:
             return
