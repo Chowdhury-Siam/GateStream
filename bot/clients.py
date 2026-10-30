@@ -13,7 +13,11 @@ TelegramBot = Client(
     api_hash=Telegram.API_HASH,
     bot_token=Telegram.BOT_TOKEN,
     parse_mode=enums.ParseMode.MARKDOWN,
-    plugins=dict(root='bot.plugins'),
+    # Explicit imports keep retired plugins from loading after an overlay upgrade.
+    plugins=dict(root='bot.plugins', include=[
+        'admin', 'batch', 'callback', 'channel_index', 'commands', 'files',
+        'index_password', 'link', 'search',
+    ]),
     sleep_threshold=-1,
     max_concurrent_transmissions=10,
     ipv6=False
@@ -106,8 +110,6 @@ async def start_all_clients():
     # Connect MongoDB
     db.connect()
     await db.db.command('ping')
-    from bot.modules.runtime_settings import load as load_runtime_settings
-    await load_runtime_settings()
     from bot.modules.activity_store import activity_store
     await activity_store.flush()
     
