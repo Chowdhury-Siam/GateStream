@@ -39,6 +39,16 @@ export default {
     for (const name of ['Host', 'Connection', 'Keep-Alive', 'Transfer-Encoding', 'Upgrade']) {
       headers.delete(name);
     }
+    // Anonymous analytics key, not an auth credential. Overwrite any caller
+    // value and preserve visitor grouping across changing proxy connections.
+    headers.delete('X-GateStream-Client');
+    const visitor = request.headers.get('CF-Connecting-IPv6') || request.headers.get('CF-Connecting-IP');
+    if (visitor && (incoming.pathname.startsWith('/dl/') || incoming.pathname.startsWith('/index/archive/'))) {
+      const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(
+        `${visitor}|${request.headers.get('User-Agent') || ''}`));
+      headers.set('X-GateStream-Client', Array.from(new Uint8Array(digest),
+        value => value.toString(16).padStart(2, '0')).join(''));
+    }
     try {
       // Pass the response through without reading the body or changing range headers.
       return await fetch(origin.toString(), {
