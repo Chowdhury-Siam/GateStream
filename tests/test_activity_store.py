@@ -144,3 +144,18 @@ class ActivityPersistenceTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(result['phases']['upload']['active'],0)
                 self.assertEqual(result['persistence']['state'],'saved')
                 self.assertIn('no-store',response.headers['Cache-Control'])
+
+    async def test_new_download_totals_survive_restart_with_older_checkpoint_fields(self):
+        database=Collection()
+        database.documents['transfer_activity']=dict(phases={'media':{'completed':20,'bytes':100}})
+        tracker=TransferActivity()
+        store=ActivityStore(tracker,lambda:database)
+        self.assertTrue(await store.flush())
+        tracker.downloaded_range(('file',b'client'),'single',0,6,6)
+        tracker.downloaded_range(('zip',b'client'),'zip',0,3,6)
+        tracker.downloaded_range(('zip',b'client'),'zip',3,6,6)
+        self.assertTrue(await store.flush())
+        restarted=TransferActivity()
+        self.assertTrue(await ActivityStore(restarted,lambda:database).flush())
+        phase=restarted.snapshot()['phases']['media']
+        self.assertEqual((phase['single_downloads'],phase['zip_downloads'],phase['completed'],phase['bytes']),(1,1,20,100))
