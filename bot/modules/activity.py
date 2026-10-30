@@ -13,6 +13,7 @@ class TransferActivity:
         self.lock = Lock()
         self.serial = 0
         self.jobs = {}
+        # Keep retired checkpoint categories readable; current downloads use media only.
         self.totals = {kind: dict(bytes=0, completed=0, failed=0, incomplete=0)
                        for kind in ('media', 'download', 'upload')}
         self.traffic = {kind: deque() for kind in self.totals}
