@@ -133,7 +133,7 @@ async def download_file(url, directory, max_bytes, progress=None):
         raise DriveTransferError('The download URL redirected too many times.')
 
 
-def upload_file(path, name, credentials, folder_id='', progress=None):
+def upload_file(path, name, credentials, folder_id='', progress=None, cancelled=None):
     metadata = {'name': name}
     if folder_id:
         metadata['parents'] = [folder_id]
@@ -145,6 +145,8 @@ def upload_file(path, name, credentials, folder_id='', progress=None):
                 fields='id,name,size,webViewLink', supportsAllDrives=True)
             result = None
             while result is None:
+                if cancelled and cancelled.is_set():
+                    raise DriveTransferError('Drive job cancelled.')
                 status, result = request.next_chunk(num_retries=3)
                 if progress and status is not None:
                     progress(status.resumable_progress, path.stat().st_size)
@@ -159,3 +161,156 @@ def upload_file(path, name, credentials, folder_id='', progress=None):
         raise DriveTransferError(f'Drive upload failed (HTTP {error.resp.status}). Check the token scope, Drive API, folder access and storage quota.') from None
     finally:
         media.stream().close()
+
+
+FOLDER_MIME = 'application/vnd.google-apps.folder'
+SHORTCUT_MIME = 'application/vnd.google-apps.shortcut'
+DRIVE_FIELDS = 'id,name,mimeType,size,webViewLink,resourceKey,capabilities(canCopy)'
+
+
+def drive_source(value):
+    """Accept Google share URLs (including resource keys) or a bare file ID."""
+    from urllib.parse import parse_qs
+    value = value.strip()
+    if re.fullmatch(r'[A-Za-z0-9_-]{10,200}', value):
+        return value, ''
+    try:
+        url = urlsplit(value)
+        if (url.scheme != 'https' or url.hostname not in ('drive.google.com', 'docs.google.com')
+                or url.username or url.password or url.port not in (None, 443)):
+            raise ValueError()
+        query = parse_qs(url.query)
+        match = re.search(r'/(?:folders|d)/([A-Za-z0-9_-]+)(?:/|$)', url.path)
+        ident = match.group(1) if match else query.get('id', [''])[0]
+        resource = query.get('resourcekey', [''])[0]
+        if not re.fullmatch(r'[A-Za-z0-9_-]{10,200}', ident) or (resource and not re.fullmatch(r'[A-Za-z0-9_-]{1,200}', resource)):
+            raise ValueError()
+        return ident, resource
+    except ValueError:
+        raise DriveTransferError('Use a Google Drive file/folder share link or file ID.') from None
+
+
+def drive_index_link(base, name, is_folder=False):
+    """Base is the Bhadoo path for the exact configured upload folder."""
+    from urllib.parse import quote
+    if not base:
+        return None
+    url = urlsplit(base)
+    if (url.scheme != 'https' or not url.hostname or url.username or url.password
+            or url.query or url.fragment or url.port not in (None, 443)
+            or not re.fullmatch(r'/\d+:/.*', url.path + ('/' if url.path.endswith(':') else ''))):
+        raise DriveTransferError('DRIVE_INDEX_URL must be an HTTPS Bhadoo folder URL, e.g. https://index.example/0:/Mirror/.')
+    # Drive permits slashes in names; Bhadoo resolves slash-separated paths.
+    if not name or any(c in name for c in '/\\') or name in ('.', '..'):
+        return None
+    return base.rstrip('/') + '/' + quote(name, safe='') + ('/' if is_folder else '')
+
+
+def clone_drive(source, credentials, folder_id='', max_items=1000, progress=None, cancelled=None):
+    """Snapshot a bounded tree, then copy it inside Drive without local media I/O."""
+    from collections import deque
+    ident, resource = drive_source(source)
+    if max_items <= 0:
+        raise DriveTransferError('DRIVE_CLONE_MAX_FILES must be positive.')
+    keys = {ident: resource} if resource else {}
+    root_created = None
+
+    def check():
+        if cancelled and cancelled.is_set():
+            raise DriveTransferError('Drive job cancelled.')
+
+    def execute(request, write=False, key_id=ident):
+        check()
+        if keys.get(key_id):
+            request.headers['X-Goog-Drive-Resource-Keys'] = f'{key_id}/{keys[key_id]}'
+        # Never blindly retry a copy/create: a timed-out write may have succeeded.
+        return request.execute(num_retries=0 if write else 3)
+
+    try:
+        with build('drive', 'v3', credentials=credentials, cache_discovery=False) as service:
+            files = service.files()
+            root = execute(files.get(fileId=ident, supportsAllDrives=True, fields=DRIVE_FIELDS))
+            if root.get('resourceKey'):
+                keys[ident] = root['resourceKey']
+            entries = [(root, None)]
+            pending = deque([root] if root['mimeType'] == FOLDER_MIME else [])
+            seen = {ident}
+            while pending:
+                parent = pending.popleft()
+                page = None
+                while True:
+                    data = execute(files.list(q=f"'{parent['id']}' in parents and trashed = false",
+                        fields=f'nextPageToken,incompleteSearch,files({DRIVE_FIELDS})', pageToken=page,
+                        pageSize=1000, includeItemsFromAllDrives=True, supportsAllDrives=True), key_id=parent['id'])
+                    if data.get('incompleteSearch'):
+                        raise DriveTransferError('Google returned an incomplete folder listing. No files were copied; try a smaller folder.')
+                    for item in data.get('files', []):
+                        if item['id'] in seen:
+                            continue
+                        seen.add(item['id'])
+                        entries.append((item, parent['id']))
+                        if len(entries) > max_items:
+                            raise DriveTransferError('This selection exceeds DRIVE_CLONE_MAX_FILES (files and folders). No files were copied.')
+                        if item.get('resourceKey'):
+                            keys[item['id']] = item['resourceKey']
+                        if item['mimeType'] == FOLDER_MIME:
+                            pending.append(item)
+                    if progress:
+                        progress('Scanning', len(entries), None)
+                    page = data.get('nextPageToken')
+                    if not page:
+                        break
+            # Refuse shortcuts rather than silently following links outside the tree.
+            if any(item['mimeType'] == SHORTCUT_MIME for item, _ in entries):
+                raise DriveTransferError('The selection contains Drive shortcuts. Clone their actual targets separately. No files were copied.')
+            if any(item['mimeType'] != FOLDER_MIME and item.get('capabilities', {}).get('canCopy') is False for item, _ in entries):
+                raise DriveTransferError('Google does not allow copying one or more files. No files were copied.')
+            mapping = {}
+            result = None
+            try:
+                for index, (item, parent) in enumerate(entries):
+                    target = mapping[parent] if parent else (folder_id or 'root')
+                    metadata = {'name': item['name']}
+                    if target:
+                        metadata['parents'] = [target]
+                    if item['mimeType'] == FOLDER_MIME:
+                        metadata['mimeType'] = FOLDER_MIME
+                        request = files.create(body=metadata, supportsAllDrives=True, fields=DRIVE_FIELDS)
+                    else:
+                        request = files.copy(fileId=item['id'], body=metadata, supportsAllDrives=True, fields=DRIVE_FIELDS)
+                    copied = execute(request, write=True, key_id=item['id'])
+                    mapping[item['id']] = copied['id']
+                    if result is None:
+                        result = copied
+                        root_created = copied['id']
+                    if progress:
+                        progress('Cloning', index + 1, len(entries))
+                check()
+                return {**result, 'file_count': sum(item['mimeType'] != FOLDER_MIME for item, _ in entries)}
+            except BaseException:
+                if root_created:
+                    try:
+                        # Only this job's new root is trashed; source/existing items are untouched.
+                        files.update(fileId=root_created, body={'trashed': True}, supportsAllDrives=True).execute(num_retries=0)
+                    except Exception:
+                        raise DriveTransferError('Clone stopped; cleanup could not be confirmed. Check the destination for a partial copy before retrying.') from None
+                raise
+    except RefreshError:
+        raise DriveTransferError('Google authorization expired or was revoked. Regenerate your Drive token.') from None
+    except HttpError as error:
+        raise DriveTransferError(f'Drive clone failed (HTTP {error.resp.status}). Check source access, copy permission, token scope and destination quota. Check Drive before retrying an uncertain write.') from None
+
+
+def check_destination(credentials, folder_id=''):
+    """Read-only check; never creates a test file or changes sharing permissions."""
+    try:
+        with build('drive', 'v3', credentials=credentials, cache_discovery=False) as service:
+            result = service.files().get(fileId=folder_id or 'root', supportsAllDrives=True,
+                fields='id,mimeType,capabilities(canAddChildren)').execute(num_retries=1)
+        if result.get('mimeType') != FOLDER_MIME or not result.get('capabilities', {}).get('canAddChildren'):
+            raise DriveTransferError('The destination must be a folder where your Google account can create files.')
+        return True
+    except RefreshError:
+        raise DriveTransferError('Google authorization expired or was revoked. Generate a new token.') from None
+    except HttpError as error:
+        raise DriveTransferError(f'Drive check failed (HTTP {error.resp.status}). Check the token scope and destination access.') from None
