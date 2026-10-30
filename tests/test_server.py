@@ -114,106 +114,42 @@ class TelegramReplyTests(unittest.IsolatedAsyncioTestCase):
                 self.assertIn(properties[-1], caption)
                 self.assertIn('https://user-app.hf.space/dl/test-code', caption)
 
+    async def test_private_credentials_are_not_indexed_as_media(self):
+        message = SimpleNamespace(document=SimpleNamespace(file_name='token.json'),reply=AsyncMock(),copy=AsyncMock())
+        with patch.object(self.files,'save_file',AsyncMock()) as save:
+            await self.files.handle_user_file.__wrapped__(None,message)
+        save.assert_not_awaited()
+        message.copy.assert_not_awaited()
+        self.assertFalse(message.reply.call_args.kwargs['quote'])
 
-class DriveCommandTests(unittest.IsolatedAsyncioTestCase):
-    @classmethod
-    def setUpClass(cls):
-        with patch.object(clients.TelegramBot, 'add_handler'):
-            from bot.plugins import drive
-        cls.drive = drive
 
-    def message(self, user_id=12345):
-        from hydrogram.types import Message
-        from unittest.mock import MagicMock
-        message = MagicMock(spec=Message)
-        message.from_user = SimpleNamespace(id=user_id)
-        message.text = '/drive https://example.com/file.bin'
-        message.reply = AsyncMock(return_value=SimpleNamespace(edit_text=AsyncMock()))
-        return message
-
-    async def test_only_admins_can_start_transfers_and_feature_defaults_off(self):
-        message = self.message(user_id=999)
-        with patch.object(self.drive.Drive, 'ENABLED', True), patch.object(self.drive, 'load_credentials') as load:
-            await self.drive.drive_command(None, message)
-            load.assert_not_called()
-            self.assertIn('Administrators', message.reply.call_args.kwargs['text'])
-        message = self.message()
-        with patch.object(self.drive.Drive, 'ENABLED', False), patch.object(self.drive, 'load_credentials') as load:
-            await self.drive.drive_command(None, message)
-            load.assert_not_called()
-            self.assertIn('disabled', message.reply.call_args.args[0])
-
-    async def test_failed_download_cleans_temporary_file(self):
+class RetiredPluginTests(unittest.TestCase):
+    def test_overlay_upgrade_cannot_load_retired_plugins(self):
+        import importlib
+        import tempfile
         from pathlib import Path
-        paths = []
-
-        async def fail_download(url, directory, limit, progress=None):
-            path = Path(directory) / 'payload'
-            path.write_bytes(b'partial-download')
-            paths.append(path)
-            raise self.drive.DriveTransferError('The file exceeds DRIVE_MAX_MB.')
-
-        message = self.message()
-        with patch.object(self.drive.Drive, 'ENABLED', True), patch.object(self.drive, 'load_credentials', return_value=object()):
-            with patch.object(self.drive, 'download_file', fail_download), patch.object(self.drive, 'upload_file') as upload:
-                await self.drive.drive_command(None, message)
-                upload.assert_not_called()
-        self.assertTrue(paths)
-        self.assertFalse(paths[0].exists())
-        self.assertFalse(self.drive._job_lock.locked())
-
-    async def test_success_cleans_download_and_returns_drive_button(self):
-        from pathlib import Path
-        paths = []
-
-        async def download(url, directory, limit, progress=None):
-            path = Path(directory) / 'payload'
-            path.write_bytes(b'abc')
-            paths.append(path)
-            return path, 'file.bin'
-
-        message = self.message()
-        message.caption = message.text
-        message.text = None
-        with patch.object(self.drive.Drive, 'ENABLED', True), patch.object(self.drive, 'load_credentials', return_value=object()):
-            with patch.object(self.drive, 'download_file', download), patch.object(self.drive, 'upload_file', return_value={'id': 'new-file'}):
-                await self.drive.drive_command(None, message)
-        self.assertFalse(paths[0].exists())
-        self.assertEqual(message.reply.return_value.edit_text.call_args.kwargs['reply_markup'].inline_keyboard[0][0].url,
-                         'https://drive.google.com/file/d/new-file/view')
-
-    async def test_clone_returns_encoded_index_button_without_downloading_media(self):
-        message=self.message()
-        message.text='/clone https://drive.google.com/drive/folders/source123456'
-        result=dict(id='newroot',name='Season #1',mimeType='application/vnd.google-apps.folder',file_count=3)
-        with patch.object(self.drive.Drive,'ENABLED',True), \
-             patch.object(self.drive.Drive,'INDEX_URL','https://index.example/0:/Mirror/'), \
-             patch.object(self.drive,'load_credentials',return_value=object()), \
-             patch.object(self.drive,'clone_drive',return_value=result) as clone, \
-             patch.object(self.drive,'download_file',AsyncMock()) as download:
-            await self.drive.drive_command(None,message)
-        clone.assert_called_once()
-        download.assert_not_awaited()
-        call=message.reply.return_value.edit_text.call_args
-        buttons=call.kwargs['reply_markup'].inline_keyboard
-        self.assertEqual(buttons[1][0].url,'https://index.example/0:/Mirror/Season%20%231/')
-        self.assertIn('3 files',call.args[0])
-        self.assertFalse(self.drive._job_lock.locked())
-
-    async def test_invalid_drive_source_does_not_load_credentials(self):
-        message=self.message();message.text='/clone https://example.com/not-drive'
-        with patch.object(self.drive.Drive,'ENABLED',True),patch.object(self.drive,'load_credentials') as load:
-            await self.drive.drive_command(None,message)
-        load.assert_not_called()
-        self.assertIn('Google Drive',message.reply.call_args.args[0])
-
-    async def test_cancel_signals_running_job(self):
-        message=self.message();message.text='/canceldrive'
-        self.drive._job_cancel.clear()
-        async with self.drive._job_lock:
-            await self.drive.drive_status(None,message)
-            self.assertTrue(self.drive._job_cancel.is_set())
-        self.drive._job_cancel.clear()
+        imported=[]
+        real_import=importlib.import_module
+        def checked(name):
+            imported.append(name)
+            if name in ('bot.plugins.drive','bot.plugins.settings'):
+                raise AssertionError('Retired plugin was loaded')
+            return real_import(name)
+        previous=os.getcwd()
+        with tempfile.TemporaryDirectory() as directory:
+            tree=Path(directory)/'bot/plugins';tree.mkdir(parents=True)
+            for name in ('drive','settings'):
+                (tree/(name+'.py')).write_text('raise RuntimeError("retired code must not run")')
+            try:
+                os.chdir(directory)
+                with patch('hydrogram.client.import_module',side_effect=checked),patch.object(clients.TelegramBot,'add_handler'):
+                    clients.TelegramBot.load_plugins()
+            finally:
+                os.chdir(previous)
+        self.assertIn('bot.plugins.channel_index',imported)
+        self.assertIn('bot.plugins.index_password',imported)
+        self.assertNotIn('bot.plugins.drive',imported)
+        self.assertNotIn('bot.plugins.settings',imported)
 
 
 class ActivityEndpointTests(unittest.IsolatedAsyncioTestCase):
