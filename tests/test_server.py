@@ -182,6 +182,39 @@ class DriveCommandTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(message.reply.return_value.edit_text.call_args.kwargs['reply_markup'].inline_keyboard[0][0].url,
                          'https://drive.google.com/file/d/new-file/view')
 
+    async def test_clone_returns_encoded_index_button_without_downloading_media(self):
+        message=self.message()
+        message.text='/clone https://drive.google.com/drive/folders/source123456'
+        result=dict(id='newroot',name='Season #1',mimeType='application/vnd.google-apps.folder',file_count=3)
+        with patch.object(self.drive.Drive,'ENABLED',True), \
+             patch.object(self.drive.Drive,'INDEX_URL','https://index.example/0:/Mirror/'), \
+             patch.object(self.drive,'load_credentials',return_value=object()), \
+             patch.object(self.drive,'clone_drive',return_value=result) as clone, \
+             patch.object(self.drive,'download_file',AsyncMock()) as download:
+            await self.drive.drive_command(None,message)
+        clone.assert_called_once()
+        download.assert_not_awaited()
+        call=message.reply.return_value.edit_text.call_args
+        buttons=call.kwargs['reply_markup'].inline_keyboard
+        self.assertEqual(buttons[1][0].url,'https://index.example/0:/Mirror/Season%20%231/')
+        self.assertIn('3 files',call.args[0])
+        self.assertFalse(self.drive._job_lock.locked())
+
+    async def test_invalid_drive_source_does_not_load_credentials(self):
+        message=self.message();message.text='/clone https://example.com/not-drive'
+        with patch.object(self.drive.Drive,'ENABLED',True),patch.object(self.drive,'load_credentials') as load:
+            await self.drive.drive_command(None,message)
+        load.assert_not_called()
+        self.assertIn('Google Drive',message.reply.call_args.args[0])
+
+    async def test_cancel_signals_running_job(self):
+        message=self.message();message.text='/canceldrive'
+        self.drive._job_cancel.clear()
+        async with self.drive._job_lock:
+            await self.drive.drive_status(None,message)
+            self.assertTrue(self.drive._job_cancel.is_set())
+        self.drive._job_cancel.clear()
+
 
 class ActivityEndpointTests(unittest.IsolatedAsyncioTestCase):
     async def test_live_endpoint_is_uncached_and_private(self):
@@ -218,5 +251,21 @@ class ActivityEndpointTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((phase['bytes'],phase['completed'],phase['active']), (3,1,0))
 
 
-if __name__ == '__main__':
-    unittest.main()
+
+
+    async def test_single_file_total_combines_ranges_and_excludes_playback(self):
+        from bot.modules.activity import TransferActivity
+        tracker = TransferActivity()
+        doc = dict(file_name='file.mp4',file_size=6,mime_type='video/mp4',channel_id=1,message_id=2)
+        with patch.object(main,'activity',tracker), patch.object(main,'get_file',AsyncMock(return_value=doc)), \
+             patch.object(main,'get_cached_chunk',AsyncMock(return_value=b'abcdef')), \
+             patch.object(main,'is_chunk_cached',return_value=True),patch.object(main,'add_bandwidth_bytes',AsyncMock()), \
+             patch.object(main,'flush_ram'),patch.object(main,'check_memory_circuit_breaker'):
+            client=instance.test_client()
+            await client.head('/dl/file')
+            await client.get('/dl/file?stream=1')
+            self.assertEqual(tracker.snapshot()['phases']['media']['single_downloads'],0)
+            for value in ['bytes=0-2','bytes=0-0','bytes=3-999']:
+                await client.get('/dl/file',headers={'Range':value})
+            self.assertEqual(tracker.snapshot()['phases']['media']['single_downloads'],1)
+            self.assertEqual(tracker.snapshot()['phases']['media']['zip_downloads'],0)
