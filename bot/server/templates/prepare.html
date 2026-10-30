@@ -17,7 +17,7 @@
   {% if state.state in ('queued', 'preparing') %}
   <h1>Preparing your ZIP.</h1>
   <progress value="{{ state.bytes }}" max="{{ state.total }}" aria-label="ZIP preparation"></progress>
-  <p>{{ 'Waiting to start…' if state.state == 'queued' else 'Preparing… ' ~ (100 * state.bytes / state.total)|int ~ '%' }}</p>
+  <p>{{ 'Queued · ' if state.state == 'queued' else 'Prepared ' }}{{ (100 * state.bytes / state.total)|int if state.total else 0 }}% · {{ get_human_size(state.bytes) }} / {{ get_human_size(state.total) }}{% if state.source_speed_bps %} · {{ get_human_size(state.source_speed_bps) }}/s{% endif %}</p>
   <p>Your download will start when it is ready. You can then pause, resume, or use multiple connections.</p>
   {% else %}
   <h1>ZIP unavailable.</h1><p>Preparation failed or the temporary ZIP is no longer available. Select the files again to retry.</p>
