@@ -513,3 +513,29 @@ out by the server, not proof of a saved client file. Past completed downloads
 missed by the old counter cannot be reconstructed accurately and are not added
 retroactively. Existing totals, database names/settings and HF metadata remain
 unchanged. Drive is still completely removed.
+
+
+## v2.0.13 — Refresh expired Telegram media references
+
+Media streams now handle both raised file-reference errors and Hydrogram's
+logged-error/early-EOF behavior. A short read refreshes its channel message
+through the same downloading bot once, then resumes at the next unread chunk.
+Single-chunk video/prefetch reads use the same recovery. Refresh attempts are
+bounded; stalls and persistent failures still fall back to the existing worker
+rotation logic and retry limits. Continuous-download outer retries also request
+a fresh message rather than reusing an expired one-hour cached reference.
+
+Worker media lookups do not silently borrow the primary bot's file reference.
+If fallback is needed, the download switches to the primary bot explicitly.
+Refreshing one worker's message does not clear other workers' valid cached
+references. Indexing and ordinary message lookups retain their existing primary
+bot fallback. Cooldown logs no longer describe every media-read failure as
+Telegram rate limiting. The upstream SDK may still log the first expired
+reference before recovery; persistent errors can indicate lost channel access
+or a changed/deleted source message.
+
+Deploy the updated origin; the Worker has no changes in this release. Existing
+ZIP preparation, completion counters, user notices and complete Drive removal
+remain intact. Database names/settings and HF metadata are preserved. Tests
+simulate expired references and interrupted streams; live Telegram recovery
+still needs verification on the deployment.
