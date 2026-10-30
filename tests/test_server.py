@@ -153,6 +153,23 @@ class RetiredPluginTests(unittest.TestCase):
 
 
 class ActivityEndpointTests(unittest.IsolatedAsyncioTestCase):
+    async def test_download_grouping_uses_stable_worker_key_or_cloudflare_visitor_address(self):
+        key = '1a' * 32
+        async with instance.test_request_context('/dl/file', headers={'X-GateStream-Client': key}):
+            self.assertEqual(main.download_client(), bytes.fromhex(key))
+        hashes = []
+        for proxy in ('192.0.2.1', '192.0.2.2'):
+            async with instance.test_request_context('/dl/file', headers={
+                'CF-Connecting-IP': '198.51.100.1', 'User-Agent': 'DownloadManager',
+            }, scope_base={'client': (proxy, 1234)}):
+                hashes.append(main.download_client())
+        self.assertEqual(hashes[0], hashes[1])
+        async with instance.test_request_context('/dl/file', headers={
+            'CF-Connecting-IP': '198.51.100.2', 'User-Agent': 'DownloadManager',
+            'X-GateStream-Client': 'invalid-key',
+        }):
+            self.assertNotEqual(main.download_client(), hashes[0])
+
     async def test_live_endpoint_is_uncached_and_private(self):
         from bot.modules.activity import TransferActivity
         activity = TransferActivity()
