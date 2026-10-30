@@ -72,19 +72,41 @@ async def iter_parallel_ranges(read, start, count):
 
 
 async def iter_media_chunks(client, message, offset, limit):
-    """Keep one bounded stream open; fail stalled reads so the caller can retry."""
-    async with aclosing(client.stream_media(message, offset=offset, limit=limit)) as stream:
-        while True:
-            try:
-                chunk = await asyncio.wait_for(anext(stream), timeout=MEDIA_READ_TIMEOUT)
-            except StopAsyncIteration:
-                return
-            yield chunk
+    """Read bounded chunks, refreshing a stale reference once on the same client.
+
+    Hydrogram can log FILE_REFERENCE_EXPIRED and end its iterator instead of
+    raising it. Early EOF therefore needs the same recovery as that exception.
+    """
+    received = 0
+    refreshed = False
+    while received < limit:
+        try:
+            async with aclosing(client.stream_media(message, offset=offset + received, limit=limit - received)) as stream:
+                while True:
+                    try:
+                        chunk = await asyncio.wait_for(anext(stream), timeout=MEDIA_READ_TIMEOUT)
+                    except StopAsyncIteration:
+                        break
+                    received += 1
+                    yield chunk
+        except Exception as error:
+            if type(error).__name__ not in ('FileReferenceExpired', 'FileReferenceEmpty', 'FileReferenceInvalid'):
+                raise
+        if received >= limit:
+            return
+        chat_id = getattr(getattr(message, 'chat', None), 'id', None)
+        message_id = getattr(message, 'id', None)
+        if refreshed or chat_id is None or message_id is None:
+            raise IOError('Telegram media stream ended before the requested chunks arrived')
+        refreshed = True
+        message = await get_message(chat_id, message_id, client=client, force_refresh=True, allow_fallback=False)
+        if message is None:
+            raise IOError('Could not refresh the Telegram media reference for this worker')
 
 async def get_media_chunk(client, message, offset):
     """Drain the limited stream so Hydrogram releases its transmission slot."""
     chunk = None
-    async for data in client.stream_media(message, offset=offset, limit=1):
+    async for data in iter_media_chunks(client, message, offset=offset, limit=1):
         chunk = data
     return chunk
 
@@ -101,14 +123,14 @@ def invalidate_message_cache(chat_id: int | str = None, message_id: int = None):
     for k in keys_to_remove:
         _MESSAGE_CACHE.pop(k, None)
 
-async def get_message(chat_id: int | str, message_id: int, client: Client = None, force_refresh: bool = False) -> Message | None:
+async def get_message(chat_id: int | str, message_id: int, client: Client = None, force_refresh: bool = False, allow_fallback: bool = True) -> Message | None:
     target_client = client or get_worker_client() or TelegramBot
     client_name = getattr(target_client, 'name', 'bot')
     cache_key = (client_name, chat_id, message_id)
     now = time.time()
 
     if force_refresh:
-        invalidate_message_cache(chat_id, message_id)
+        _MESSAGE_CACHE.pop(cache_key, None)
     elif cache_key in _MESSAGE_CACHE:
         cached_msg, ts = _MESSAGE_CACHE[cache_key]
         if now - ts < _CACHE_TTL:
@@ -128,7 +150,7 @@ async def get_message(chat_id: int | str, message_id: int, client: Client = None
             mark_worker_cooldown(client_name, getattr(e, 'value', 30))
         # If worker client does not have peer in memory, resolve chat and retry get_messages
         try:
-            await target_client.get_chat(chat_id)
+            await asyncio.wait_for(target_client.get_chat(chat_id), timeout=8.0)
             message = await asyncio.wait_for(target_client.get_messages(chat_id=chat_id, message_ids=message_id), timeout=8.0)
             if message and message.empty:
                 message = None
@@ -136,7 +158,7 @@ async def get_message(chat_id: int | str, message_id: int, client: Client = None
             pass
 
         # Fallback to main TelegramBot if worker failed to resolve message
-        if not message and target_client != TelegramBot:
+        if allow_fallback and not message and target_client != TelegramBot:
             try:
                 target_client = TelegramBot
                 client_name = getattr(target_client, 'name', 'bot')
