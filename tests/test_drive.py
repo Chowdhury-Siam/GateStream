@@ -141,5 +141,110 @@ class DriveTests(unittest.IsolatedAsyncioTestCase):
                     drive.upload_file(path, 'video.mp4', object())
 
 
-if __name__ == '__main__':
-    unittest.main()
+    def test_drive_share_links_and_index_paths(self):
+        ident = 'abc1234567890'
+        for link in [ident, f'https://drive.google.com/file/d/{ident}/view',
+                     f'https://drive.google.com/drive/u/0/folders/{ident}',
+                     f'https://drive.google.com/open?id={ident}']:
+            self.assertEqual(drive.drive_source(link), (ident, ''))
+        self.assertEqual(drive.drive_source(f'https://drive.google.com/file/d/{ident}/view?resourcekey=0-key'), (ident, '0-key'))
+        for link in ['https://drive.google.com.evil.com/file/d/'+ident,
+                     'https://user:pass@drive.google.com/file/d/'+ident, 'https://example.com/file', 'bad-id']:
+            with self.assertRaises(drive.DriveTransferError): drive.drive_source(link)
+        self.assertEqual(drive.drive_index_link('https://index.example/0:/Mirror/', 'বাংলা #1?.mkv'),
+            'https://index.example/0:/Mirror/%E0%A6%AC%E0%A6%BE%E0%A6%82%E0%A6%B2%E0%A6%BE%20%231%3F.mkv')
+        self.assertEqual(drive.drive_index_link('https://index.example/1:', 'Season 1', True),
+            'https://index.example/1:/Season%201/')
+        self.assertIsNone(drive.drive_index_link('', 'file'))
+        self.assertIsNone(drive.drive_index_link('https://index.example/0:/', 'bad/name'))
+        for base in ['http://index.example/0:/', 'https://user:secret@index.example/0:/',
+                     'https://index.example/', 'https://index.example/0:/?token=secret']:
+            with self.assertRaises(drive.DriveTransferError): drive.drive_index_link(base, 'file')
+
+    def clone_service(self):
+        service = MagicMock()
+        root = dict(id='source123456', name='Season 1', mimeType=drive.FOLDER_MIME)
+        child = dict(id='child1234567', name='Subfolder', mimeType=drive.FOLDER_MIME)
+        file = dict(id='media1234567', name='One.mkv', mimeType='video/x-matroska', size='3', resourceKey='0-media')
+        api = service.files.return_value
+        for method in ('get','list','create','copy'):
+            getattr(api, method).return_value.headers = {}
+        api.get.return_value.execute.return_value = root
+        api.list.return_value.execute.side_effect = [dict(files=[child],nextPageToken='second'), dict(files=[file]), dict(files=[])]
+        api.create.return_value.execute.side_effect = [dict(root,id='newroot'), dict(child,id='newchild')]
+        api.copy.return_value.execute.return_value = dict(file,id='newmedia')
+        context = MagicMock()
+        context.__enter__.return_value = service
+        return api, context
+
+    def test_clone_tree_pagination_resource_keys_and_destination(self):
+        api, context = self.clone_service()
+        with patch.object(drive, 'build', return_value=context):
+            updates=[]
+            result=drive.clone_drive('https://drive.google.com/drive/folders/source123456?resourcekey=root-key', object(), 'destination',
+                progress=lambda *args:updates.append(args))
+        self.assertEqual((result['id'],result['file_count']),('newroot',1))
+        self.assertEqual(api.list.call_count,3)
+        self.assertEqual(api.list.call_args_list[1].kwargs['pageToken'],'second')
+        self.assertEqual(api.create.call_args_list[0].kwargs['body']['parents'],['destination'])
+        self.assertEqual(api.create.call_args_list[1].kwargs['body']['parents'],['newroot'])
+        self.assertEqual(api.copy.call_args.kwargs['body']['parents'],['newroot'])
+        self.assertEqual(api.copy.return_value.headers['X-Goog-Drive-Resource-Keys'],'media1234567/0-media')
+        self.assertEqual(api.copy.return_value.execute.call_args.kwargs['num_retries'],0)
+        self.assertEqual(updates[-1],('Cloning',3,3))
+        api.update.assert_not_called()
+        service=context.__enter__.return_value
+        service.permissions.assert_not_called()
+
+    def test_clone_preflight_rejects_limits_shortcuts_and_restricted_files_before_writes(self):
+        for case in ('limit','shortcut','copy-disabled','incomplete'):
+            api,context=self.clone_service()
+            if case!='limit':
+                item=dict(id='media1234567',name='file',mimeType='video/mp4',capabilities={'canCopy':False})
+                if case=='shortcut': item['mimeType']=drive.SHORTCUT_MIME
+                api.list.return_value.execute.side_effect=[dict(files=[item],incompleteSearch=case=='incomplete')]
+            with self.subTest(case=case),patch.object(drive,'build',return_value=context):
+                with self.assertRaises(drive.DriveTransferError):
+                    drive.clone_drive('source123456',object(),max_items=1 if case=='limit' else 10)
+                api.create.assert_not_called()
+                api.copy.assert_not_called()
+
+    def test_cancelled_or_failed_clone_trashes_only_the_new_root(self):
+        from threading import Event
+        for cancel in (True,False):
+            api,context=self.clone_service()
+            stop=Event()
+            def update(stage,done,total):
+                if stage=='Cloning' and done==1 and cancel: stop.set()
+            if not cancel: api.copy.return_value.execute.side_effect=RuntimeError('transport failed')
+            with self.subTest(cancel=cancel),patch.object(drive,'build',return_value=context):
+                with self.assertRaises((drive.DriveTransferError,RuntimeError)):
+                    drive.clone_drive('source123456',object(),progress=update,cancelled=stop)
+                self.assertEqual(api.update.call_args.kwargs['fileId'],'newroot')
+                self.assertEqual(api.update.call_args.kwargs['body'],{'trashed':True})
+
+    def test_clone_cleanup_failure_is_reported_and_upload_cancels_before_network_write(self):
+        from threading import Event
+        api,context=self.clone_service()
+        api.copy.return_value.execute.side_effect=RuntimeError('failure')
+        api.update.return_value.execute.side_effect=RuntimeError('cannot trash')
+        with patch.object(drive,'build',return_value=context),self.assertRaisesRegex(drive.DriveTransferError,'partial copy'):
+            drive.clone_drive('source123456',object())
+        stop=Event();stop.set()
+        with tempfile.TemporaryDirectory() as directory:
+            path=Path(directory)/'payload';path.write_bytes(b'abc')
+            with patch.object(drive,'build',return_value=context),self.assertRaisesRegex(drive.DriveTransferError,'cancelled'):
+                drive.upload_file(path,'file.bin',object(),cancelled=stop)
+        api.create.return_value.next_chunk.assert_not_called()
+
+    def test_single_file_clone_uses_my_drive_root_when_destination_is_blank(self):
+        api, context = self.clone_service()
+        item=dict(id='source123456',name='video.mp4',mimeType='video/mp4')
+        api.get.return_value.execute.return_value=item
+        api.copy.return_value.execute.return_value=dict(item,id='newfile')
+        with patch.object(drive,'build',return_value=context):
+            result=drive.clone_drive('source123456',object())
+        self.assertEqual(result['file_count'],1)
+        self.assertEqual(api.copy.call_args.kwargs['body']['parents'],['root'])
+        api.create.assert_not_called()
+        api.list.assert_not_called()
