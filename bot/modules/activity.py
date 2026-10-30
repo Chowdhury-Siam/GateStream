@@ -103,6 +103,9 @@ class TransferActivity:
         ponytail: in-flight coverage is bounded to 1024 client/resource pairs and
         expires after 24h; persist sessions separately if cross-restart coverage is needed.
         """
+        start, stop = max(0, start), min(size, stop)
+        if start >= stop:
+            return
         now = self.clock()
         with self.lock:
             while self.download_ranges:
@@ -119,7 +122,7 @@ class TransferActivity:
                     return
                 entry['ranges'] = []
                 entry['complete'] = False
-            intervals = sorted(entry['ranges'] + [(max(0, start), min(size, stop))])
+            intervals = sorted(entry['ranges'] + [(start, stop)])
             merged = []
             for left, right in intervals:
                 if merged and left <= merged[-1][1]:
@@ -143,16 +146,23 @@ class TransferActivity:
             async for chunk in stream:
                 done += len(chunk)
                 self.progress(ident, done)
+                if download:
+                    # A manager may close an open-ended HTTP range after its
+                    # assigned segment, or stop reading at Content-Length.
+                    # Record bytes handed out, without waiting for source EOF
+                    # or its cleanup/network calls to finish.
+                    category, start, size, client = download
+                    self.downloaded_range((key, client), category,
+                        start + min(done - len(chunk), total), start + min(done, total), size)
                 yield chunk
             if done >= total:
                 outcome = 'completed'
-                if download:
-                    category, start, size, client = download
-                    self.downloaded_range((key, client), category, start, start + total, size)
         except Exception:
             outcome = 'failed'
             raise
         finally:
+            if outcome == 'incomplete' and done >= total:
+                outcome = 'completed'
             try:
                 await stream.aclose()
             finally:
