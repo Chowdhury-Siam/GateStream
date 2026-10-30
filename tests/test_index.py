@@ -93,7 +93,7 @@ class IndexRouteTests(unittest.IsolatedAsyncioTestCase):
             response = await self.client.get('/index?section=link', scheme='https')
             listing.assert_not_awaited()
         body = await response.get_data(as_text=True)
-        self.assertIn('Unlock Link', body)
+        self.assertIn('Private links', body)
         self.assertNotIn('Siam', body)
         self.assertIn('no-store', response.headers['Cache-Control'])
         api = await self.client.get('/api/movies', scheme='https')
@@ -107,7 +107,7 @@ class IndexRouteTests(unittest.IsolatedAsyncioTestCase):
         self.settings.assert_not_awaited()
         self.assertEqual(response.status_code, 200)
         body = await response.get_data(as_text=True)
-        self.assertIn('The public index.', body)
+        self.assertIn('Your library', body)
         self.assertNotIn('type="password"', body)
         self.assertIn('section=link', body)
 
@@ -231,8 +231,8 @@ class IndexRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('/dl/test-code', body)
         self.assertIn('Download', body)
         self.assertIn('Start immediately', body)
-        self.assertIn('Prepare with resume', body)
-        self.assertIn('Resume and multiple connections', body)
+        self.assertIn('Prepare first', body)
+        self.assertIn('Both support resume', body)
         self.assertIn('Season 1', body)
         self.assertIn('&lt;script&gt;', body)
         self.assertNotIn('<script>alert(1)</script>', body)
@@ -241,7 +241,7 @@ class IndexRouteTests(unittest.IsolatedAsyncioTestCase):
         csrf = re.search(r'name="csrf" value="([^"]+)"', body).group(1)
         self.assertEqual((await self.client.post('/index/logout', form={'csrf': csrf}, scheme='https')).status_code, 302)
         body = await (await self.client.get('/index?section=link', scheme='https')).get_data(as_text=True)
-        self.assertIn('Unlock Link', body)
+        self.assertIn('Private links', body)
 
     async def test_immediate_mode_shares_one_build_supports_ranges_and_enforces_access(self):
         import io
@@ -288,8 +288,20 @@ class IndexRouteTests(unittest.IsolatedAsyncioTestCase):
             with ZipFile(io.BytesIO(payload)) as archive:
                 self.assertIsNone(archive.testzip())
                 self.assertEqual(archive.read('01-one.bin'),b'abcd')
+            form['zip_name'] = 'বাংলা collection.zip'
             response = await self.client.post('/index/download',form=form,headers={'Accept':'application/json'},scheme='https')
-            self.assertEqual((await response.get_json())['mode'],'stream')
+            result = await response.get_json()
+            self.assertEqual(result['mode'],'stream')
+            from urllib.parse import unquote
+            self.assertTrue(unquote(result['url']).endswith('/বাংলা collection.zip'))
+            named = await manager.get(result['url'],scheme='https')
+            self.assertIn("filename*=UTF-8''", named.headers['Content-Disposition'])
+            self.assertEqual(await named.get_data(),payload)
+            named_head = await manager.head(result['url'],scheme='https')
+            self.assertEqual(named_head.headers['Content-Disposition'],named.headers['Content-Disposition'])
+            form['zip_name'] = 'x'*121
+            self.assertEqual((await self.client.post('/index/download',form=form,scheme='https')).status_code,400)
+            form.pop('zip_name')
             form['mode'] = 'invalid'
             self.assertEqual((await self.client.post('/index/download',form=form,scheme='https')).status_code,400)
             form.update(mode='stream',section='link')
@@ -306,7 +318,7 @@ class IndexRouteTests(unittest.IsolatedAsyncioTestCase):
         from datetime import datetime, timedelta, timezone
         token = 'a' * 43
         files = [dict(code='one', file_name='file.bin', file_size=4)]
-        ticket = dict(_id=token, section='index', codes=['one'], files=files,
+        ticket = dict(_id=token, section='index', codes=['one'], files=files, filename='My prepared ZIP.zip',
             archive_version=2, expires_at=datetime.now(timezone.utc)+timedelta(hours=24))
         storage = SimpleNamespace(find_one=AsyncMock(return_value=ticket))
         release = asyncio.Event()
@@ -331,6 +343,10 @@ class IndexRouteTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.wait_for(self.zip_cache.jobs[token]['task'],1)
             full = await self.client.get(link,scheme='https')
             payload = await full.get_data()
+            self.assertIn('filename="My prepared ZIP.zip"',full.headers['Content-Disposition'])
+            ready = await self.client.get(f'/index/prepare/{token}',scheme='https')
+            from urllib.parse import unquote
+            self.assertTrue(unquote(ready.headers['Location']).endswith('/My prepared ZIP.zip'))
             from bot.modules.archive_cache import ArchiveCache
             restarted = ArchiveCache(self.zip_directory.name, self.zip_cache.max_bytes)
             with patch.object(catalog,'archive_cache',restarted):
@@ -451,7 +467,7 @@ class IndexRouteTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(catalog, 'list_files', AsyncMock()) as listing:
             response = await self.client.get('/index?section=link', scheme='https')
             listing.assert_not_awaited()
-        self.assertIn('Unlock Link', await response.get_data(as_text=True))
+        self.assertIn('Private links', await response.get_data(as_text=True))
 
 
 class OwnerPasswordTests(unittest.IsolatedAsyncioTestCase):
