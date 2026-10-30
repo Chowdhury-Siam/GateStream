@@ -484,3 +484,32 @@ Checks: `node --test tests/catalog_progress.test.cjs` in either package, plus
 the existing Python suite and the GitHub package's Worker tests. Live host
 performance has not been measured. User notices and the complete Drive removal
 remain intact; database settings and Hugging Face README metadata are unchanged.
+
+
+## v2.0.12 — Count downloads closed at Content-Length
+
+The single-file and ZIP totals now record actual byte coverage as chunks are
+handed to HTTP responses, including partial open-ended range connections closed
+by download managers after their assigned segment. Previously a complete file
+could remain uncounted when a connection closed at Content-Length before the
+source iterator reached EOF/cleanup. Receiving the entire advertised response
+payload now counts as a completed request even if that connection closes then.
+Only full resource byte coverage increments the file/ZIP total; overlapping
+retries do not multiply totals, gaps stay incomplete, and playback/HEAD/internal
+ZIP preparation remain excluded.
+
+Deploy both the origin and the updated Cloudflare Worker. The Worker overwrites
+an anonymous visitor/agent hash header to keep all range connections grouped
+when origin-side proxy addresses vary. Older Workers can fall back to forwarded
+Cloudflare visitor headers; direct hosting falls back to the remote address.
+These headers affect analytics only and never authorize access. Raw visitor
+addresses and user agents are not stored by this counter or exposed by its API.
+
+Successful download totals still persist in the existing MongoDB analytics
+checkpoint. In-progress range coverage is memory-only, bounded to 1024 pairs
+and 24 hours, and resets on restart. Changing visitor address or User-Agent
+during a download can split its coverage. The totals describe bytes handed
+out by the server, not proof of a saved client file. Past completed downloads
+missed by the old counter cannot be reconstructed accurately and are not added
+retroactively. Existing totals, database names/settings and HF metadata remain
+unchanged. Drive is still completely removed.
