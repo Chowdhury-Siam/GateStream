@@ -86,3 +86,38 @@ test('forwards catalog POST forms, cookies and body without buffering ZIP respon
   }
   assert.equal((await worker.fetch(new Request('https://proxy.example/dl/code', { method: 'POST' }), env)).status, 405);
 });
+
+test('anonymous download grouping survives separate ranges and overwrites caller keys', async (t) => {
+  const keys = [];
+  t.mock.method(globalThis, 'fetch', async (url, options) => {
+    const key = options.headers.get('X-GateStream-Client');
+    assert.match(key, /^[a-f0-9]{64}$/);
+    assert.notEqual(key, 'caller-controlled');
+    keys.push(key);
+    return new Response('part');
+  });
+  for (const [address, agent, range] of [
+    ['192.0.2.1', 'Manager', 'bytes=0-'],
+    ['192.0.2.1', 'Manager', 'bytes=200-'],
+    ['192.0.2.2', 'Manager', 'bytes=0-'],
+    ['192.0.2.1', 'OtherManager', 'bytes=0-'],
+  ]) {
+    await worker.fetch(new Request('https://proxy.example/dl/file', {headers: {
+      'CF-Connecting-IP': address, 'User-Agent': agent, 'Range': range,
+      'X-GateStream-Client': 'caller-controlled',
+    }}), env);
+  }
+  assert.equal(keys[0], keys[1]);
+  assert.notEqual(keys[0], keys[2]);
+  assert.notEqual(keys[0], keys[3]);
+});
+
+test('caller grouping key is stripped when no edge visitor address exists', async (t) => {
+  t.mock.method(globalThis, 'fetch', async (url, options) => {
+    assert.equal(options.headers.get('X-GateStream-Client'), null);
+    return new Response('part');
+  });
+  await worker.fetch(new Request('https://proxy.example/dl/file', {headers: {
+    'X-GateStream-Client': 'caller-controlled',
+  }}), env);
+});
