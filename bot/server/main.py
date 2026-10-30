@@ -5,7 +5,7 @@ from logging import getLogger
 from quart import Blueprint, Response, request, render_template, jsonify
 from bot import version
 from math import ceil
-from re import match as re_match
+from re import match as re_match, fullmatch
 from .error import abort
 from .catalog import authenticated
 from bot.clients import get_worker_client, TelegramBot, mark_worker_cooldown, worker_clients
@@ -80,8 +80,15 @@ async def security_and_bot_check():
 # ==================== STREAM & DOWNLOAD ROUTES ====================
 
 def download_client():
-    # No raw IP/agent retained; don't trust forwarded headers supplied by clients.
-    return hashlib.sha256(f'{request.remote_addr}|{request.headers.get("User-Agent", "")}'.encode()).digest()
+    # Analytics grouping only, never authentication or authorization. The Worker
+    # overwrites this anonymous key so changing origin-side proxy connections
+    # cannot split one manager's ranges. No raw IP/agent is retained.
+    client = request.headers.get('X-GateStream-Client', '')
+    if fullmatch(r'[0-9a-f]{64}', client):
+        return bytes.fromhex(client)
+    address = (request.headers.get('CF-Connecting-IPv6') or
+               request.headers.get('CF-Connecting-IP') or request.remote_addr)
+    return hashlib.sha256(f'{address}|{request.headers.get("User-Agent", "")}'.encode()).digest()
 
 
 @bp.route('/dl/<string:file_code>')
