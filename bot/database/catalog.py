@@ -32,7 +32,6 @@ def _pipeline(category, query, section='index'):
     if query:
         expression = {'$regex': re.escape(query), '$options': 'i'}
         pipeline.append({'$match': {'$or': [{'file_name': expression}, {'batch_title': expression}]}})
-    pipeline.append({'$sort': {'created_at': -1, 'code': 1}})
     return pipeline
 
 
@@ -48,7 +47,8 @@ async def list_files(page=1, query='', category='all', section='index'):
         facet = {'total': [{'$count': 'value'}]}
         if len(files) < PAGE_SIZE:
             facet['items'] = [{'$skip': offset}, {'$limit': PAGE_SIZE - len(files)}]
-        result = await collection.aggregate(_pipeline(name, query, section) + [{'$facet': facet}]).to_list(length=1)
+        result = await collection.aggregate(_pipeline(name, query, section) + [
+            {'$sort': {'created_at': -1, 'code': 1}}, {'$facet': facet}]).to_list(length=1)
         result = result[0] if result else {}
         count = result.get('total', [{}])[0].get('value', 0) if result.get('total') else 0
         total += count
@@ -64,7 +64,13 @@ async def selected_files(codes, section):
         collection = getattr(db, name)
         if collection is None:
             continue
-        pipeline = _pipeline(name, '', section) + [
+        # Filter documents before unwinding batches; a selection needs no sort.
+        # Keep both section checks and the post-unwind match: matching a batch
+        # must never include its unselected siblings or private Link records.
+        pipeline = [{'$match': {'$or': [
+            {'code': {'$in': codes}}, {'_id': {'$in': codes}},
+            {'episodes.code': {'$in': codes}},
+        ]}}] + _pipeline(name, '', section) + [
             {'$match': {'code': {'$in': codes}}}, {'$limit': PAGE_SIZE}]
         for item in await collection.aggregate(pipeline).to_list(length=PAGE_SIZE):
             found[item['code']] = item
