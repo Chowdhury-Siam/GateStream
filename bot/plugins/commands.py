@@ -10,6 +10,7 @@ from bot.config import Telegram
 from bot.database.files import get_stats, get_bandwidth_stats
 from bot.modules.static import WelcomeText, PrivacyText, get_human_size
 from bot.modules.decorators import verify_user, verify_admin
+from bot.modules.new_users import notify_new_user
 
 BOT_START_TIME = time.time()
 
@@ -31,12 +32,15 @@ def get_readable_time(seconds: int) -> str:
 
 @TelegramBot.on_message(filters.command(['start', 'help']) & filters.private)
 @verify_user
-async def start_command(_, msg: Message):
+async def start_command(client, msg: Message):
     await msg.reply(
         text=WelcomeText % {'first_name': msg.from_user.first_name},
         quote=True,
         disable_web_page_preview=True
     )
+
+    if msg.command and msg.command[0].split('@', 1)[0].lower() == 'start':
+        await notify_new_user(client, msg.from_user)
 
 @TelegramBot.on_message(filters.command('privacy') & filters.private)
 @verify_user
