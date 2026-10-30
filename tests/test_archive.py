@@ -68,3 +68,15 @@ class ArchiveTests(unittest.IsolatedAsyncioTestCase):
         await stream.aclose()
         self.assertEqual(started, ['one'])
         self.assertEqual(closed, ['one'])
+
+    def test_archive_filename_is_unicode_safe_and_never_adds_double_extension(self):
+        for value, expected in [('My episodes','My episodes.zip'), ('বাংলা.zip','বাংলা.zip'),
+                                ('file.ZIP.zip','file.zip'), ('../bad\r\n:name','_bad_name.zip'),
+                                ('CON','_CON.zip'), ('','GateStream-index.zip')]:
+            self.assertEqual(module.archive_filename(value),expected)
+        with self.assertRaises(ValueError): module.archive_filename('x'*121)
+        header=module.archive_disposition('বাংলা #1.zip')
+        self.assertIn("filename*=UTF-8''",header)
+        self.assertNotIn('\r',header)
+        self.assertIn('%23',header)
+        self.assertIn('filename="My episodes.zip"',module.archive_disposition('My episodes.zip'))
