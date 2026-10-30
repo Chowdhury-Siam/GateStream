@@ -1,145 +1,172 @@
-# Direct URL to Google Drive
+# Google Drive mirror, clone and index
 
-GateStream includes an optional, administrator-only transfer command:
+For in-bot setup, send **`/dset`** as the owner. Set the folder/index, upload
+your own OAuth `token.json` under **Private Files**, check the connection, and
+enable transfers. See [BOT_SETTINGS.md](BOT_SETTINGS.md). Existing host token
+settings remain an alternative.
 
-```text
-/drive https://files.example.com/video.mp4
-```
+Drive transfers remain optional, **disabled by default**, and limited to the
+owner/admins in private Telegram chats. Existing token settings, destination
+folder and limits are preserved.
 
-`/gdrive` is an alias. Send the command in a private chat with the bot. The bot
-checks its configured credentials, downloads the file to temporary disk,
-uploads it with the Google Drive API, removes its local copy, and replies with
-an **Open in Google Drive** button. It does not make files public or change
-sharing permissions; existing destination-folder permissions still apply.
+| Command | What it does |
+| --- | --- |
+| `/mirror <direct-file-url>` | Downloads a public HTTP file to temporary disk, uploads it to Drive, then removes the temporary copy |
+| `/clone <drive-share-link-or-id>` | Copies a Drive file or an entire folder tree using Google's server-side API; no media download to the bot |
+| `/drive <url>` or `/gdrive <url>` | Existing aliases; Google share URLs automatically use clone, other URLs use mirror |
+| `/drivestatus` | Shows the current job stage and progress |
+| `/canceldrive` | Requests cancellation after the current network operation |
 
-## Hosting permission
+Only one Drive job runs at a time. Telegram progress updates every three seconds
+when the stage or transferred amount changes. Other admins can check or cancel
+the running job. Restarting the host interrupts the job; there is no persistent
+job queue or automatic job recovery.
 
-The feature is **disabled by default**. Enable it only on hosting that permits
-this file-transfer workload. Hugging Face documents HTTP/HTTPS networking and
-ephemeral disk, but those technical capabilities do not explicitly approve a
-general file-transfer bot. If using Spaces, obtain confirmation from Hugging
-Face before enabling it. Adding this feature cannot unpause a Space that is
-flagged or otherwise restricted. Do not use a proxy to bypass hosting restrictions.
+## Hugging Face compatibility, checked 2026-10-30
 
-References checked for this feature:
+Spaces allow outbound HTTP/HTTPS on ports 80, 443 and 8080. Google Drive API and
+OAuth endpoints use HTTPS/443, so these API operations are technically compatible.
+Folder clones keep media within Google Drive, avoiding temporary media storage
+on the Space. Mirrors need sufficient temporary disk for one complete file.
+Spaces disk is ephemeral and free hardware can sleep; an interrupted transfer
+cannot be promised to continue after a restart.
+
+These technical capabilities **do not establish permission to run a general
+bulk mirror service**. Hugging Face's policy restricts unauthorized bot APIs,
+excessive bulk activity, irrelevant repository data and bypassing restrictions.
+Check with Hugging Face before enabling this workload on a Space. The feature
+stays opt-in; GateStream does not bypass network limits or hosting restrictions.
+
+Sources:
 - https://huggingface.co/docs/hub/spaces-overview#networking
 - https://huggingface.co/docs/hub/spaces-storage
 - https://huggingface.co/content-policy
 
-## Credentials
+## Credentials and destination
 
-Use a **trusted token.pickle that you created yourself**. It must contain a
-`google.oauth2.credentials.Credentials` object authorized for Drive uploads,
-usually with the `drive.file` or `drive` OAuth scope and an offline refresh token.
-Enable the Google Drive API in the token's Google Cloud project. Older
-`oauth2client` pickles, service-account JSON, and client-secrets JSON are not
-accepted by this loader. If your token uses another format, generate a compatible
-token locally; do not rename a JSON file to `.pickle`.
+Keep using your existing trusted host OAuth `token.pickle`, or upload an
+authorized-user `token.json` through the owner settings panel. It must contain a
+`google.oauth2.credentials.Credentials` object with an offline refresh token.
+Enable the Google Drive API in your own Google Cloud project. `drive.file`
+access is limited to files authorized for that app; cloning arbitrary accessible
+existing files/folders generally needs the `https://www.googleapis.com/auth/drive`
+scope. The account must be allowed to read/copy each source and create files
+in the destination. Copy restrictions and quota still apply.
 
-Pickle files can execute code when loaded. Only the deployment owner should
-supply this file. Never download an untrusted token or accept one through the
-bot. OAuth credentials grant access to the account: do not commit them, send
-them in Telegram, or paste them into public logs. Credential filenames are
-excluded from Git and Docker build contexts.
+A pickle can execute code. Generate it yourself; never accept one from a bot
+user, an unknown website or an untrusted attachment. Service-account JSON,
+client-secrets JSON and old `oauth2client` pickles are not accepted by the host
+pickle loader. The settings panel only accepts OAuth authorized-user JSON. No browser login is performed on the server. Expired/revoked OAuth
+refresh tokens must be regenerated locally.
 
-No browser login is performed on the server. The Google client handles access
-token refresh during API requests. A revoked/invalid refresh token requires new
-credentials. The token file is not overwritten, so read-only secret mounts work.
-
-## Local machine or VPS
-
-Install the updated `requirements.txt`, put your trusted token outside the
-repository if possible, and configure the host environment or `.env`:
+On a permitted host, configure:
 
 ```dotenv
 DRIVE_ENABLED=true
-DRIVE_TOKEN_PATH=/absolute/path/to/token.pickle
-DRIVE_FOLDER_ID=
+DRIVE_TOKEN_PATH=/run/secrets/token.pickle
+DRIVE_FOLDER_ID=your_destination_folder_id
 DRIVE_MAX_MB=1024
+DRIVE_CLONE_MAX_FILES=1000
+DRIVE_INDEX_URL=https://your-index.example/0:/Mirror/
 ```
 
-`DRIVE_FOLDER_ID` is optional. Leave it blank to upload to the authorized user's
-My Drive root, or enter the destination folder's **ID**, not its URL. The token
-must be able to create files there. A `drive.file` token only accesses files and
-folders authorized for that OAuth app; an arbitrary existing folder may require
-separate authorization. Accessible shared-drive folders are also supported.
+`DRIVE_FOLDER_ID` is an ID, not a URL. Blank keeps the existing My Drive root
+behavior. Accessible shared-drive folders are supported. `DRIVE_MAX_MB` limits
+each mirrored file. `DRIVE_CLONE_MAX_FILES` counts files **and folders**, including
+the cloned root, in one preflight snapshot. Clone byte sizes are not charged
+against the mirror's local-disk limit, because clone does not stage media.
 
-Restart the bot and send `/drive <direct-file-url>` as the owner or an admin
-listed in `AUTH_USERS`.
-
-### Docker secret file
-
-The image deliberately excludes `*.pickle`. Mount the token at runtime rather
-than baking it into the image. For example, add these options to your existing
-Docker invocation, using an absolute local path:
-
-```text
---mount type=bind,source=/absolute/path/token.pickle,target=/run/secrets/token.pickle,readonly
--e DRIVE_ENABLED=true
--e DRIVE_TOKEN_PATH=/run/secrets/token.pickle
-```
-
-The container's user must be able to read the mounted file.
-
-## Hosts without secret file mounts
-
-On hosting that permits this workload but only provides environment secrets,
-encode the trusted token locally:
+Mount the secret token at runtime; it is deliberately excluded from Git and the
+Docker build context. If the approved host only supports environment secrets,
+encode your trusted token locally:
 
 ```bash
 python -c "import base64,pathlib; print(base64.b64encode(pathlib.Path('token.pickle').read_bytes()).decode())"
 ```
 
-Paste the output into a host **Secret** called `DRIVE_TOKEN_PICKLE_B64`, then set
-`DRIVE_ENABLED=true`. Base64 is an encoding, not encryption. Treat the output
-like the original token. This secret takes precedence over `DRIVE_TOKEN_PATH`.
-Never put it in repository files or an ordinary public configuration variable.
+Store that value in the host **Secret** `DRIVE_TOKEN_PICKLE_B64`. It takes
+precedence over `DRIVE_TOKEN_PATH`. Base64 is not encryption: protect it like
+the original token. Do not put the base64 pickle in public variables, source, logs, or Telegram.
+The settings panel uses a separate JSON-only credential flow.
+Existing host secrets are not changed. Uploaded JSON credentials take precedence
+until removed in /bset. Drive settings saved in the bot override the environment
+for those editable values until reset to host defaults.
 
-For a Hugging Face deployment, do this only after the workload is approved and
-the Space is allowed to run. Use **Space Settings → Variables and secrets**;
-GitHub Actions secrets do not automatically reach the bot's host. Your Cloudflare
-Worker is not involved in the Google Drive upload and needs no OAuth token.
+## Connect BhadooGDIndex
 
-## Limits and behavior
+Deploy/configure your own index separately using
+https://github.com/rokibhasansagar/BhadooGDIndex. Use your own Google credentials
+and an index account that can read the bot's destination. GateStream does not
+install another Worker or share its Google token with the index.
 
-- Only bot administrators can use the command, in private chat.
-- One transfer runs at a time. Additional requests receive a busy message.
-- The default limit is **1024 MiB** per file; `DRIVE_MAX_MB` changes it. Both
-  declared file sizes and actual downloaded bytes are checked.
-- Downloads stream to disk in 1 MiB chunks. At least 64 MiB of disk reserve is
-  kept; Google uploads use resumable 8 MiB chunks with bounded retries.
-- URLs must be public HTTP/HTTPS file endpoints on ports 80, 443, or 8080.
-  Each redirect is checked. Private, loopback, link-local, metadata and multicast
-  destinations are blocked, including hostnames resolving to those addresses.
-- Signed URL query strings are preserved. Cookies, browser login and custom
-  authorization headers are not supported. Use a genuine downloadable URL;
-  `/stream/...` player pages and login/share pages are rejected when they return HTML.
-- The upload keeps the source filename from `Content-Disposition`, or the URL
-  path when no name is supplied. Remote names are never used as local paths.
-- Normal completion and failures remove temporary files. Process termination or
-  a host restart interrupts the job; jobs are not persisted or automatically
-  resumed after a restart. Check Drive before retrying an interrupted upload to
-  avoid duplicates. The original file is never deleted from its source.
-- This command does not add the uploaded file to the Telegram/MongoDB catalog.
-  It uploads to Google Drive and returns a Drive link.
+`DRIVE_INDEX_URL` is the **full browser folder URL for the exact destination**:
 
-## Checks
+- If `DRIVE_FOLDER_ID` is the index's root folder: `https://index.example/0:/`.
+- If it is a folder named `Mirror` under that root: `https://index.example/0:/Mirror/`.
+- For a second indexed drive, use its actual number, such as `/1:/Mirror/`.
 
-```bash
-python -m unittest discover -s tests -v
-```
+GateStream appends the uploaded/cloned name with UTF-8 URL encoding. Files get a
+**Download from index** button; folder clones get a **Browse folder** button.
+Leave the setting blank to return Google Drive buttons only. Google Drive links
+are always provided. A Google account or the index's own login may be required.
+GateStream's Link password does **not** protect an independently hosted index.
 
-Tests mock Google and HTTP responses; they cover credentials loading, public-URL
-checks, redirects, size/disk limits, upload metadata, permissions, and temporary
-file cleanup. No live Google Drive upload is performed by the tests.
+Drive filenames containing slashes cannot be represented reliably as Bhadoo
+paths, so those results get only the Google Drive button. Bhadoo resolves by
+name: duplicate names in the same destination can be ambiguous. Choose a dedicated
+destination and resolve duplicates in Drive if an index opens the wrong item.
+Google-native documents may need to be opened/exported through Drive instead
+of downloaded as binary files from the index.
 
-Google upload reference:
-https://developers.google.com/workspace/drive/api/guides/manage-uploads
+The bot does not call the permissions API or make source/destination files
+public. New files inherit the destination's existing sharing. The index uses
+its own authorized Google access and access controls.
 
-## Live progress on the home page
+## Reliability and limits
 
-Open the GateStream home page during a transfer to see stage counts, byte totals,
-percentage, average speed, elapsed time and ETA. Unknown download sizes show an
-indeterminate bar. Drive uploads update when a resumable chunk is acknowledged,
-so progress can advance in steps. These anonymous statistics are public and reset
-when the server restarts.
+Mirrors retain the previous protections: public direct HTTP/HTTPS URLs only;
+each redirect and DNS resolution is checked against private/local addresses;
+signed query strings are preserved; HTML/login/player pages are rejected;
+declared and actual sizes are limited; at least 64 MiB of disk reserve is kept.
+Downloads use 1 MiB disk writes and uploads use resumable 8 MiB chunks with
+bounded retries. OAuth is never forwarded to the source HTTP server.
+
+Clones read all pages of a bounded folder snapshot before creating anything.
+Shortcuts, incomplete listings and files Google explicitly marks uncopyable
+are rejected before writes. Link resource keys are supported. Original media
+and existing destination items are never deleted or moved. Newly created files
+and folders inherit the destination's permissions; folder structure and names
+are copied, not source sharing rules.
+
+On a failed/cancelled clone, the bot attempts to trash **only its newly created
+root copy**, which also contains that job's copied children. Cleanup failure is
+reported. Copy/create requests are not blindly retried, because a timed-out
+write may already have succeeded. A hard kill, connection failure during a
+write, or lost API response can leave a partial/uncertain result: check the
+destination before retrying. Sources can change after the preflight snapshot;
+this is a copy job, not a transactional backup.
+
+`/canceldrive` cooperates between chunks and API calls. It does not forcibly kill
+a thread during a Drive write. Temporary files stay available until a running
+upload thread exits, then are removed. Cancellation may wait for the current
+network operation. Completed files are not automatically deleted by a late
+cancel request.
+
+Mirrors and clones return Drive/index links; they do not add Drive objects to
+the Telegram-backed catalog. Users browse them through the configured index.
+The home page shows actual mirror download/upload bytes. Server-side clone
+operations do not pretend to transfer media through the host.
+
+## Verification
+
+Run `python -m unittest discover -s tests -v`. Tests mock Google and HTTP:
+credentials, SSRF defenses, disk limits, resumable upload metadata, paginated
+folder copies, resource keys, copy restrictions, cancellation, cleanup, encoded
+index links and admin command behavior are checked. Live OAuth, Drive quota,
+permissions and your particular index deployment require real-account testing.
+
+Google API references:
+- https://developers.google.com/workspace/drive/api/reference/rest/v3/files/copy
+- https://developers.google.com/workspace/drive/api/guides/folder
+- https://developers.google.com/workspace/drive/api/guides/resource-keys
+- https://developers.google.com/workspace/drive/api/guides/manage-uploads
