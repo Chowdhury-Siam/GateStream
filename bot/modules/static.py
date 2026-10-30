@@ -37,12 +37,16 @@ Hi **%(first_name)s**. Turn your Telegram library into stream and download links
 ❓ `/help` - Show this help menu.
 
 **Admin Commands:**
+⚙ `/bset` - Owner-only settings menu; `/dset` opens Drive setup.
 🔐 `/setpassword <new password>` - Change the Link category password (owner only).
 ☁️ `/drive <url>` - Download a direct file link and upload it to Google Drive (optional).
 📊 `/stats` - View live database, RAM, CPU & bandwidth metrics.
 ⏱️ `/sync_duration` - Auto-backfill video duration for all past records.
 🧹 `/clean` - Flush RAM caches & compact memory.
 💻 `/sh <cmd>` - Execute a terminal shell command.
+☁️ `/mirror <direct-url>` - Download a direct file to Google Drive.
+📋 `/clone <drive-link>` - Copy a Drive file or folder.
+📊 `/drivestatus` · `/canceldrive` - Drive job progress and cancellation.
 🔄 `/restart` - Restart the bot process.
 📦 `/backup` - Download full MongoDB database backup file.
 🧹 `/purge <count>` - Purge messages in chat (or reply with `/purge`).
@@ -57,9 +61,11 @@ PrivacyText = """
 
 **3. User Control:** You can revoke links anytime using the "Revoke" button or commands.
 
-**4. Automatic Categories:** Cleaned media titles and release years are sent to AniList and any configured MyAnimeList/OMDb providers during automatic classification. Channel scans are public in Index; /link discovery is password protected. Temporary ZIP links authorize their selected files for one hour.
+**4. Automatic Categories:** Cleaned media titles and release years are sent to AniList and any configured MyAnimeList/OMDb providers during automatic classification. Channel scans are public in Index; /link discovery is password protected. Temporary ZIP links authorize their selected files for 24 hours. Custom ZIP names are stored with their tickets.
 
-**5. Your Deployment:** The hosting provider and deployment owner control the server and database. [View GateStream's source](https://github.com/Chowdhury-Siam/GateStream) before deploying your own instance.
+**5. Drive Transfers:** Optional admin-only mirror/clone jobs use the owner’s Google credentials. Destination-folder sharing applies; the bot does not make files public. A configured external Drive index has its own access policy.
+
+**6. Your Deployment:** The hosting provider and deployment owner control the server and database. [View GateStream's source](https://github.com/Chowdhury-Siam/GateStream) before deploying your own instance.
 
 __By using this bot, you agree to this policy.__
 """
