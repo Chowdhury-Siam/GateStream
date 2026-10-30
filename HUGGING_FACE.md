@@ -120,7 +120,7 @@ The Space must be permitted to run: source updates do not clear a paused
 
 ## Optional Google Drive transfers
 
-The `/drive` command is included but disabled. HTTPS networking and temporary
+The `/drive`, `/mirror` and `/clone` commands are included but disabled by default. HTTPS networking and temporary
 disk are technically available on Spaces, but this does not establish that a
 general file-transfer bot is permitted. Confirm permission with Hugging Face
 before enabling the feature. A paused/flagged Space still requires their review.
@@ -154,7 +154,7 @@ Constant throughput still depends on Telegram and the host/network. Real-host
 throughput must be checked after deployment; local latency simulations do not
 predict an exact production speed.
 
-**Prepare with resume** remains available: it waits for the ZIP to finish before
+**Prepare first** remains available: it waits for the ZIP to finish before
 starting the client download, so all ranges are already ready. Both modes can
 use four connections as a starting point. Host/proxy/network limits still affect
 speed. Create a fresh selection after updating; old immediate-mode links retain
@@ -173,7 +173,7 @@ that clear temporary storage require a new selection; missing archives return
 410 and are never silently regenerated for an existing partial download. Changing
 the Link password still invalidates protected ZIP links. Upload the updated
 source, restart the Space and select files again. `/health` should report
-`X-GateStream-Version: 2.0.6`.
+`X-GateStream-Version: 2.0.8`.
 
 ## Dashboard totals after a restart
 
@@ -185,3 +185,35 @@ is required for these statistics. A hard kill can lose the most recent unsaved
 interval; database failures are reported on the dashboard. Earlier unsaved
 counts cannot be recovered, except existing media bytes in the legacy bandwidth
 record where available.
+
+## ZIP names, compact controls and Drive index links (2.0.7)
+
+The Library and Private links pages accept a ZIP name before download; type
+only the name, and `.zip` is added automatically. Resume and parallel Telegram
+source reads are preserved. The home page adds separate persistent single-file
+and ZIP delivery totals; bandwidth and Drive cards are expandable.
+
+On approved hosting, existing Drive credentials/folder settings still work.
+`/mirror` transfers direct URLs; `/clone` copies Drive files/folder trees within
+Google. Optional `DRIVE_INDEX_URL` must be the Bhadoo folder URL matching
+`DRIVE_FOLDER_ID`; the bot then returns encoded index download/browse buttons.
+`DRIVE_CLONE_MAX_FILES` defaults to 1000 items including folders. Use
+`/drivestatus` and `/canceldrive` to manage the one current job. Read
+[GOOGLE_DRIVE.md](GOOGLE_DRIVE.md) for policy findings, OAuth scopes, setup,
+cleanup and restart limits. The HTTPS capability is not blanket approval for
+a bulk mirror bot. Drive remains off unless explicitly enabled.
+
+The health response now reports `X-GateStream-Version: 2.0.8`. Existing database
+names, settings and the Hugging Face README metadata are retained.
+
+## Owner settings panel (2.0.8)
+
+Use `/bset` in the owner's private chat or `/dset` for Google Drive. Runtime
+settings and encrypted private values are stored in the existing external
+MongoDB settings collection, so ephemeral Space disk does not erase them.
+Host identity/connection variables stay unchanged. The bot restores overrides
+before processing Telegram commands. Upload `token.json` only through the
+Private Files prompt; old host `token.pickle` settings still work. Install the
+updated requirements (including cryptography) when deploying. Keep the existing
+bot token stable, or re-enter encrypted values after rotation. See
+[BOT_SETTINGS.md](BOT_SETTINGS.md). HF workload permission remains separate.
