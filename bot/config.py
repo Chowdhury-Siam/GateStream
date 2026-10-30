@@ -95,6 +95,8 @@ class Drive:
     TOKEN_PICKLE_B64 = env.get("DRIVE_TOKEN_PICKLE_B64", "")
     FOLDER_ID = env.get("DRIVE_FOLDER_ID", "").strip()
     MAX_BYTES = _get_int(env.get("DRIVE_MAX_MB", 1024), 1024) * 1024 * 1024
+    INDEX_URL = env.get("DRIVE_INDEX_URL", "").strip()
+    CLONE_MAX_FILES = _get_int(env.get("DRIVE_CLONE_MAX_FILES", 1000), 1000)
 
 
 def validate_config():
