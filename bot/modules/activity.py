@@ -1,7 +1,7 @@
 """Thread-safe activity counters with restart-safe cumulative checkpoints."""
 import asyncio
 import time
-from collections import deque
+from collections import deque, OrderedDict
 from contextlib import contextmanager
 from threading import Lock
 
@@ -16,6 +16,8 @@ class TransferActivity:
         self.totals = {kind: dict(bytes=0, completed=0, failed=0, incomplete=0)
                        for kind in ('media', 'download', 'upload')}
         self.traffic = {kind: deque() for kind in self.totals}
+        self.totals['media'].update(single_downloads=0, zip_downloads=0)
+        self.download_ranges = OrderedDict()
         self.restored = False
         self.persistence = dict(state='pending', last_saved_at=None)
 
@@ -94,7 +96,45 @@ class TransferActivity:
         finally:
             self.finish(ident, outcome)
 
-    async def track_stream(self, stream, total, key):
+    def downloaded_range(self, key, category, start, stop, size):
+        """Count full byte coverage, not each connection, HEAD, or video seek.
+
+        ponytail: in-flight coverage is bounded to 1024 client/resource pairs and
+        expires after 24h; persist sessions separately if cross-restart coverage is needed.
+        """
+        now = self.clock()
+        with self.lock:
+            while self.download_ranges:
+                first = next(iter(self.download_ranges))
+                if len(self.download_ranges) < 1024 and self.download_ranges[first]['seen'] > now - 86400:
+                    break
+                self.download_ranges.popitem(last=False)
+            entry = self.download_ranges.pop(key, {'seen': now, 'ranges': [], 'complete': False})
+            if entry['complete']:
+                # Range probes/retries after completion must not multiply totals.
+                if start != 0 or now - entry['seen'] < 10:
+                    entry['seen'] = now
+                    self.download_ranges[key] = entry
+                    return
+                entry['ranges'] = []
+                entry['complete'] = False
+            intervals = sorted(entry['ranges'] + [(max(0, start), min(size, stop))])
+            merged = []
+            for left, right in intervals:
+                if merged and left <= merged[-1][1]:
+                    merged[-1] = (merged[-1][0], max(right, merged[-1][1]))
+                else:
+                    merged.append((left, right))
+            entry.update(seen=now, ranges=merged)
+            if size > 0 and merged == [(0, size)]:
+                self.totals['media'][category + '_downloads'] += 1
+                entry['complete'] = True
+                entry['ranges'] = []
+            # Bound pathological fragmented downloads as well as client count.
+            if len(merged) <= 256:
+                self.download_ranges[key] = entry
+
+    async def track_stream(self, stream, total, key, download=None):
         ident = self.start('media', total, key)
         done = 0
         outcome = 'incomplete'
@@ -105,6 +145,9 @@ class TransferActivity:
                 yield chunk
             if done >= total:
                 outcome = 'completed'
+                if download:
+                    category, start, size, client = download
+                    self.downloaded_range((key, client), category, start, start + total, size)
         except Exception:
             outcome = 'failed'
             raise
