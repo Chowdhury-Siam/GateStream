@@ -58,7 +58,7 @@
     .panel-heading h2 { font-size: 21px; margin: 0; letter-spacing: -.5px; }
     .activity-status { color: #aaa89f; font-size: 11px; }
     .activity-status[data-live="true"] { color: #c2d7b3; }
-    .metric-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+    .metric-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
     .metric-card { padding: 18px; border: 1px solid #333129; border-radius: 10px; background: #171611; min-width: 0; }
     .metric-label { display: block; color: #aaa89f; font-size: 11px; letter-spacing: .5px; }
     .metric-value { display: block; color: #f4f0e7; font-size: 29px; line-height: 1.3; font-weight: 600; margin: 8px 0 5px; font-variant-numeric: tabular-nums; }
@@ -113,13 +113,9 @@
         <div><strong id="zip-downloads">—</strong><span>ZIPs downloaded</span></div>
       </div>
       <p class="activity-footnote">Completed downloads since this update. Range connections are combined; video playback is excluded.</p>
-      <details class="activity-details"><summary>Bandwidth &amp; Drive activity</summary>
+      <details class="activity-details"><summary>Bandwidth and connections</summary>
       <div class="metric-grid">
         <article class="metric-card"><span class="metric-label">MEDIA LINKS ACTIVE</span><strong class="metric-value" id="media-active">—</strong><span class="metric-note" id="media-connections">Waiting for activity data</span></article>
-        <article class="metric-card"><span class="metric-label">DRIVE DOWNLOADING</span><strong class="metric-value" id="download-active">—</strong><span class="metric-note" id="download-completed">— files downloaded</span></article>
-        <article class="metric-card"><span class="metric-label">DRIVE UPLOADING</span><strong class="metric-value" id="upload-active">—</strong><span class="metric-note" id="upload-completed">— files uploaded</span></article>
-        <article class="metric-card"><span class="metric-label">DOWNLOADED TO SERVER</span><strong class="metric-value" id="download-bytes">—</strong><span class="metric-note" id="download-speed">— /s recent throughput</span></article>
-        <article class="metric-card"><span class="metric-label">UPLOADED TO DRIVE</span><strong class="metric-value" id="upload-bytes">—</strong><span class="metric-note" id="upload-speed">— /s recent throughput</span></article>
         <article class="metric-card"><span class="metric-label">SENT TO VIEWERS</span><strong class="metric-value" id="media-bytes">—</strong><span class="metric-note" id="media-speed">— /s recent throughput</span></article>
       </div>
       </details>
@@ -154,24 +150,18 @@
         seconds %= 60;
         return hours ? `${hours}h ${minutes}m` : minutes ? `${minutes}m ${seconds}s` : `${seconds}s`;
       };
-      const labels = { media: 'Media download', download: 'Drive download', upload: 'Drive upload' };
+      const labels = { media: 'File download' };
       function render(data) {
         const phases = data.phases;
         text('single-downloads', (phases.media.single_downloads || 0).toLocaleString());
         text('zip-downloads', (phases.media.zip_downloads || 0).toLocaleString());
         text('media-active', data.active_media_links);
         text('media-connections', `${phases.media.active} active HTTP connection(s)`);
-        for (const kind of ['download', 'upload']) {
-          text(`${kind}-active`, phases[kind].active);
-          text(`${kind}-completed`, `${phases[kind].completed} files ${kind === 'download' ? 'downloaded' : 'uploaded'}`);
-        }
-        for (const kind of ['media', 'download', 'upload']) {
-          text(`${kind}-bytes`, bytes(phases[kind].bytes));
-          text(`${kind}-speed`, `${bytes(phases[kind].speed_bps)}/s recent throughput`);
-        }
+        text('media-bytes', bytes(phases.media.bytes));
+        text('media-speed', `${bytes(phases.media.speed_bps)}/s recent throughput`);
         text('media-completed', phases.media.completed);
-        text('transfer-failed', Object.values(phases).reduce((sum, phase) => sum + phase.failed, 0));
-        text('transfer-incomplete', Object.values(phases).reduce((sum, phase) => sum + phase.incomplete, 0));
+        text('transfer-failed', phases.media.failed);
+        text('transfer-incomplete', phases.media.incomplete);
         text('server-uptime', duration(data.uptime_seconds));
         const saved = data.persistence || {};
         text('activity-persistence', saved.state === 'saved'
@@ -201,7 +191,7 @@
         }
         if (!data.transfers.length || data.hidden_transfers) {
           const note = document.createElement('div'); note.className = 'empty-state';
-          note.textContent = data.hidden_transfers ? `${data.hidden_transfers} more transfer(s) are active; showing the latest 20.` : 'No active transfers. New media downloads and Drive transfers will appear here.';
+          note.textContent = data.hidden_transfers ? `${data.hidden_transfers} more transfer(s) are active; showing the latest 20.` : 'No active transfers. New file and ZIP downloads will appear here.';
           list.append(note);
         }
         byId('activity-panel').dataset.stale = 'false';
