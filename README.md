@@ -172,11 +172,11 @@ SDK metadata and port `7860` configuration.
 
 Sign in at `/index` with a one-time link from the bot's `/catalog` command.
 Uploads outside an index session appear under **Single files**. Start and finish
-a folder with `/index`, then choose a ZIP download mode in Telegram. Open the
+a folder with `/index`, then tap **Start immediately** in Telegram. Open the
 folder in the library to rename it or download the ZIP from the web.
 
-Folder ZIPs offer **Prepare first** and **Start immediately**. Both modes
-support HTTP ranges, resuming, and multiple connections. Archive tickets
+Folder ZIPs can be downloaded while they are being built. They support HTTP
+ranges, resuming, and multiple connections. Archive tickets
 expire after 24 hours and depend on the temporary ZIP cache. Adjust
 `ZIP_CACHE_MAX_MB` and available disk space for large folders. Anyone with
 the share link can download the folder.
@@ -460,3 +460,9 @@ in Telegram and receive the link when the ZIP is complete. Choose
 **Start immediately** to get a direct download link while the ZIP builds.
 The Python origin runs both modes through the same resumable archive cache
 as the web library.
+
+## v2.0.18 — Start ZIP downloads immediately
+
+After the final `/index`, tap **Start immediately** for a direct ZIP link.
+The web library's **Download ZIP** button starts the same resumable download.
+Previously issued links can still resume while their archive remains cached.
