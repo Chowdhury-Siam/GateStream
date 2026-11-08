@@ -22,7 +22,7 @@
     .btn, button { display:inline-block; border-radius:8px; padding:8px 12px; color:#f0c879; background:#1d1a14; border:1px solid #554733; font:inherit; text-decoration:none; cursor:pointer; }
     .primary, [aria-current="page"] { background:#d6ad60; color:#17130e; border-color:#d6ad60; font-weight:650; }
     :focus-visible { outline:2px solid #f9dc9a; outline-offset:3px; }
-    input, select { max-width:100%; border:1px solid #554733; border-radius:8px; padding:8px 10px; background:#13120f; color:#f7f3eb; font:inherit; }
+    input { max-width:100%; border:1px solid #554733; border-radius:8px; padding:8px 10px; background:#13120f; color:#f7f3eb; font:inherit; }
     input { flex:1; min-width:135px; }
     .panel, .row { background:#171611; border:1px solid #393226; border-radius:11px; padding:12px; }
     .panel { margin:14px 0; }
@@ -51,8 +51,6 @@
     {% if total %}
     <form class="panel" method="post" action="{{ url_for('.share_folder', folder_id=shared._id) }}">
       <input type="hidden" name="csrf" value="{{ csrf }}">
-      <label for="mode">Download mode</label>
-      <select name="mode" id="mode"><option value="prepare">Prepare first</option><option value="stream">Start immediately</option></select>
       <button class="primary">Download ZIP</button>
     </form>
     {% endif %}
