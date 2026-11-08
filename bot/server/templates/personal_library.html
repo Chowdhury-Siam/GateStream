@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex,nofollow">
+  <title>Your library · GateStream</title>
+  <style>
+    * { box-sizing:border-box; }
+    [hidden] { display:none !important; }
+    body { margin:0; background:#11110f; color:#f7f3eb; font:15px/1.5 system-ui,sans-serif; }
+    main { max-width:980px; margin:auto; padding:24px 18px 48px; }
+    header, nav, .row, .actions, form, .pager { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+    header { justify-content:space-between; margin-bottom:24px; }
+    .brand { display:flex; gap:10px; align-items:center; text-decoration:none; color:inherit; font-size:18px; font-weight:700; }
+    .brand svg { width:36px; height:36px; }
+    nav { margin:18px 0; }
+    h1 { font-size:clamp(26px,5vw,36px); line-height:1.2; margin:0 0 7px; overflow-wrap:anywhere; }
+    h2 { font-size:16px; margin:0; overflow-wrap:anywhere; }
+    p { margin:6px 0 12px; color:#b9b2a5; }
+    a { color:#efc478; }
+    .btn, button { display:inline-block; border-radius:8px; padding:8px 12px; color:#f0c879; background:#1d1a14; border:1px solid #554733; font:inherit; text-decoration:none; cursor:pointer; }
+    .primary, [aria-current="page"] { background:#d6ad60; color:#17130e; border-color:#d6ad60; font-weight:650; }
+    :focus-visible { outline:2px solid #f9dc9a; outline-offset:3px; }
+    input, select { max-width:100%; border:1px solid #554733; border-radius:8px; padding:8px 10px; background:#13120f; color:#f7f3eb; font:inherit; }
+    input { flex:1; min-width:135px; }
+    .panel, .row { background:#171611; border:1px solid #393226; border-radius:11px; padding:12px; }
+    .panel { margin:14px 0; }
+    .row { justify-content:space-between; margin:6px 0; }
+    .label { min-width:0; flex:1 1 220px; }
+    .meta { color:#b9b2a5; font-size:13px; }
+    .pager { justify-content:space-between; margin:14px 0; }
+    .error { color:#ffc7b6; }
+    .single-panel { max-width:530px; margin:32px auto; }
+    @media (max-width:480px) { header { margin-bottom:18px; } .row { align-items:flex-start; } }
+  </style>
+</head>
+<body><main>
+  <header>
+    <a class="brand" href="/">{% include 'brand.svg' %}GateStream</a>
+    <div class="actions">
+      {% if signed_in %}<form action="{{ url_for('.sign_out') }}" method="post"><input type="hidden" name="csrf" value="{{ csrf }}"><button>Sign out</button></form>{% endif %}
+    </div>
+  </header>
+
+  {% if shared %}
+  <section class="single-panel">
+    <h1>{{ shared.name }}</h1>
+    <p>{{ total }} file{{ '' if total == 1 else 's' }} in this shared ZIP.</p>
+    {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+    {% if total %}
+    <form class="panel" method="post" action="{{ url_for('.share_folder', folder_id=shared._id) }}">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <label for="mode">Download mode</label>
+      <select name="mode" id="mode"><option value="prepare">Prepare first</option><option value="stream">Start immediately</option></select>
+      <button class="primary">Download ZIP</button>
+    </form>
+    {% endif %}
+  </section>
+  {% elif not signed_in %}
+  <section class="single-panel">
+    <h1>Your library</h1>
+    {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+    {% if confirm_sign_in %}
+    <p>Confirm sign-in with the one-time link you received from the bot.</p>
+    <form id="sign-in" action="{{ url_for('.sign_in') }}" method="post" hidden>
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <input type="hidden" name="token">
+      <button class="primary">Sign in to my library</button>
+    </form>
+    <p id="sign-in-help">Open the sign-in link from <code>/catalog</code> with JavaScript enabled.</p>
+    <script>
+      const token = window.location.hash.slice(1);
+      if (/^[A-Za-z0-9_-]{43}$/.test(token)) {
+        const form = document.getElementById('sign-in');
+        form.elements.token.value = token;
+        form.hidden = false;
+        document.getElementById('sign-in-help').hidden = true;
+      }
+    </script>
+    {% else %}
+    <p>Sign in through Telegram to see the files and index folders you sent to the bot.</p>
+    {% if bot_username %}<a class="btn primary" href="https://t.me/{{ bot_username }}?start=library">Open Telegram bot</a>{% endif %}
+    <p>Send <code>/catalog</code> in the bot to get your sign-in link.</p>
+    {% endif %}
+  </section>
+  {% else %}
+  <h1>Your library</h1>
+  <nav aria-label="Library sections">
+    <a class="btn" {% if tab == 'index' %}aria-current="page"{% endif %} href="{{ url_for('.index') }}">Index</a>
+    <a class="btn" {% if tab == 'single' %}aria-current="page"{% endif %} href="{{ url_for('.index', tab='single') }}">Single files</a>
+  </nav>
+  {% if folder %}
+    <h2>{{ folder.name }}</h2>
+    <p>{{ files|length }} file{{ '' if files|length == 1 else 's' }} in this folder. Anyone with the ZIP link can download it.</p>
+    <div class="panel">
+      <form action="{{ url_for('.rename_folder', folder_id=folder._id) }}" method="post">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        <label for="name">Folder and ZIP name</label>
+        <input id="name" name="name" maxlength="120" value="{{ folder.name }}" required>
+        <button>Save name</button>
+        <a class="btn primary" href="{{ url_for('.share_folder', folder_id=folder._id) }}">Download / share ZIP</a>
+      </form>
+    </div>
+  {% else %}
+    <p>{% if tab == 'single' %}Files sent to the bot outside an index session.{% else %}Send <code>/index</code>, upload your files, then send <code>/index Folder name</code> to save a ZIP folder.{% endif %}</p>
+    <form class="panel" method="get" action="{{ url_for('.index') }}">
+      <input type="hidden" name="tab" value="{{ tab }}">
+      <input name="q" type="search" maxlength="100" aria-label="Search your library" placeholder="{{ 'Search files' if tab == 'single' else 'Search folders' }}" value="{{ query }}">
+      <button>Search</button>
+    </form>
+    <p class="meta">{{ total }} {{ 'files' if tab == 'single' else 'folders' }}</p>
+  {% endif %}
+
+  {% if tab == 'single' or folder %}
+    {% for item in (files if folder else items) %}
+    <article class="row">
+      <div class="label"><h2>{{ item.file_name }}</h2><div class="meta">{{ get_human_size(item.file_size or 0) }}</div></div>
+      <div class="actions">
+        {% if (item.mime_type or '').startswith(('video/', 'audio/')) %}<a href="{{ url_for('main.stream_file', file_code=item.code) }}">Play</a>{% endif %}
+        <a class="btn" href="{{ url_for('main.transmit_file', file_code=item.code) }}">Download</a>
+      </div>
+    </article>
+    {% else %}<p class="panel">{{ 'No files match your search.' if query else 'No files here yet.' }}</p>{% endfor %}
+  {% else %}
+    {% for item in items %}
+    <article class="row">
+      <div class="label"><h2><a href="{{ url_for('.folder_detail', folder_id=item._id) }}">{{ item.name }}</a></h2><span class="meta">Index folder</span></div>
+      <a class="btn" href="{{ url_for('.folder_detail', folder_id=item._id) }}">Open folder</a>
+    </article>
+    {% else %}<p class="panel">{{ 'No folders match your search.' if query else 'No finished index folders yet.' }}</p>{% endfor %}
+  {% endif %}
+  {% if not folder and pages > 1 %}
+    <nav class="pager" aria-label="Pagination">
+      <span>{% if number > 1 %}<a href="{{ url_for('.index', tab=tab, q=query, page=number-1) }}">Previous</a>{% endif %}</span>
+      <span class="meta">Page {{ number }} of {{ pages }}</span>
+      <span>{% if number < pages %}<a href="{{ url_for('.index', tab=tab, q=query, page=number+1) }}">Next</a>{% endif %}</span>
+    </nav>
+  {% endif %}
+  {% endif %}
+</main></body>
+</html>
