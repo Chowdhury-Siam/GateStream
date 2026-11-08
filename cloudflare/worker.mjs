@@ -24,8 +24,10 @@ export default {
       });
     }
     const incoming = new URL(request.url);
-    const formPost = request.method === 'POST' &&
-      ['/index/login', '/index/logout', '/index/download'].includes(incoming.pathname);
+    const formPost = request.method === 'POST' && (
+      ['/index/sign-in', '/index/sign-out'].includes(incoming.pathname) ||
+      /^\/index\/(?:share\/[A-Za-z0-9_-]{43}|folder\/[A-Za-z0-9_-]{43}\/rename)$/.test(incoming.pathname)
+    );
     if (!['GET', 'HEAD'].includes(request.method) && !formPost) {
       return new Response('Method not allowed', {
         status: 405, headers: { Allow: 'GET, HEAD, OPTIONS' },
