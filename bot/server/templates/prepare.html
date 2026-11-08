@@ -22,6 +22,6 @@
   {% else %}
   <h1>ZIP unavailable.</h1><p>Preparation failed or the temporary ZIP is no longer available. Select the files again to retry.</p>
   {% endif %}
-  <a href="{{ url_for('catalog.index_page', section=section) }}">Back to files</a>
+  <a href="{{ back }}">Back to files</a>
 </main></body>
 </html>
