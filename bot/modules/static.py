@@ -27,8 +27,9 @@ Hi **%(first_name)s**. Turn your Telegram library into stream and download links
 When a channel is configured, your first /start sends your Telegram profile details to the deployment owner’s channel. See /privacy.
 
 **User Commands:**
-🌐 `/catalog` - Open public Index files and password-protected Link files.
-🔎 `/index <last_post_link>` - Auto-index a channel and identify media categories.
+🌐 `/catalog` - Sign in to your personal library.
+📁 `/index` - Start collecting uploads. Send `/index Folder name` to finish and get a ZIP link.
+🔎 `/channelindex <last_post_link>` - Auto-index a channel and identify media categories (admin).
 ⏹ `/cancelindex` - Stop indexing and retain progress (admin).
 🔍 `/search <name>` - Search movies, anime & series with streaming links.
 ⚡ `/search_api <name>` - Search and get 1-tap copyable API endpoints.
@@ -39,7 +40,6 @@ When a channel is configured, your first /start sends your Telegram profile deta
 ❓ `/help` - Show this help menu.
 
 **Admin Commands:**
-🔐 `/setpassword <new password>` - Change the Link category password (owner only).
 📊 `/stats` - View live database, RAM, CPU & bandwidth metrics.
 ⏱️ `/sync_duration` - Auto-backfill video duration for all past records.
 🧹 `/clean` - Flush RAM caches & compact memory.
