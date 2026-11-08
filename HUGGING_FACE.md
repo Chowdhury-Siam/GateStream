@@ -145,17 +145,14 @@ Constant throughput still depends on Telegram and the host/network. Real-host
 throughput must be checked after deployment; local latency simulations do not
 predict an exact production speed.
 
-**Prepare first** remains available: it waits for the ZIP to finish before
-starting the client download, so all ranges are already ready. Both modes can
-use four connections as a starting point. Host/proxy/network limits still affect
-speed. Create a fresh selection after updating; old immediate-mode links retain
-their previous single-connection behavior.
+New ZIP downloads start immediately. Four download-manager connections can be
+a starting point. Host, proxy, and network limits still affect speed.
 
 ZIP links last 24 hours. Keep the default `ZIP_CACHE_MAX_MB=8192` (8 GiB shared
 disk budget) or set a size that fits your Space's available disk. Large selections
 must fit both that budget and free disk. `ZIP_CACHE_DIR` can point to an existing
 persistent volume if your hosting provides one. The default directory is
-`cache/archives`; do not upload its contents. One prepared-mode build and up to two live builds can run at a time.
+`cache/archives`; do not upload its contents. Up to two live ZIP builds can run at a time.
 Expired ZIPs and interrupted partial files are cleaned when new selections are
 made. Unexpired ZIPs stay available for resume instead of being evicted.
 
