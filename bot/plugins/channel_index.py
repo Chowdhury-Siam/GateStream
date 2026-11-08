@@ -2,14 +2,14 @@ import asyncio
 import logging
 import re
 from hydrogram import filters, enums
-from hydrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from bot.clients import TelegramBot
-from bot.config import Telegram, Server
+from bot.config import Telegram
 from bot.database import db
 from bot.modules.decorators import verify_user
 from bot.modules.parser import parse_telegram_link
 from bot.modules.channel_index import scan_channel
 from bot.modules import personal_library as library
+from bot.modules.index_zip import zip_choices
 
 logger = logging.getLogger('bot')
 # ponytail: one scan per process; use a database lease if running multiple bot processes.
@@ -120,16 +120,14 @@ async def personal_index(message, requested_name):
                     name = name or folder['name']
                     await library.finish_folder(folder, name)
                     share_id = folder['_id']
-                    text = f'Saved {count} files in “{name}”. Anyone with the ZIP link can download this folder.'
+                    text = (f'Saved {count} files in “{name}”. Choose how to download the ZIP. '
+                            'Anyone with the download link can use it.')
     except ValueError as error:
         return await message.reply(str(error), quote=True, parse_mode=enums.ParseMode.DISABLED)
     except Exception as error:
         logger.error('Personal index update failed (%s).', type(error).__name__)
         return await message.reply('The index could not be updated. Please try /index again shortly.', quote=True)
-    buttons = None
-    if share_id:
-        buttons = InlineKeyboardMarkup([[InlineKeyboardButton('Download ZIP',
-            url=f'{Server.BASE_URL}/index/share/{share_id}')]])
+    buttons = zip_choices(share_id) if share_id else None
     await message.reply(text, quote=True, parse_mode=enums.ParseMode.DISABLED, reply_markup=buttons,
                         disable_web_page_preview=True)
 
