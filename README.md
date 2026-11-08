@@ -27,7 +27,7 @@ Extract the ZIP and upload the **contents** of its project folder, so `README.md
 ## What you can do
 
 - **Index your channels.** Add one file with `/link`, or an episode range with `/batch`.
-- **Browse two file categories.** `/index` is public for indexed batches and episodes; the **Link** tab protects single-file links with a password. Select multiple files and download one ZIP. Initial Link password: `Siam`; the owner changes it with `/setpassword <new password>`.
+- **Browse your uploads.** Sign in through Telegram at `/index` to see your ZIP folders and single files.
 - **Find your media.** Search movies, anime, series, and direct files from Telegram.
 - **Follow transfers live.** The home page shows active links, HTTP connections, byte counts, progress, speed, elapsed time and ETA.
 - **Watch your way.** Play in the browser, resume playback, or open VLC or MX Player.
@@ -119,11 +119,12 @@ Cloudflare guide for all settings and the deployment steps.
 | `/batch anime <start_link> <end_link>` | Index anime episodes |
 | `/batch series <start_link> <end_link>` | Index series episodes |
 | `/episodes <batch_code>` | List a batch's episodes |
-| `/index <last_post_link>` | Automatically scan a channel, resume progress and identify media categories |
-| `/index @channel` | Continue up to the latest post observed by the bot |
+| `/channelindex <last_post_link>` | Automatically scan a channel, resume progress and identify media categories |
+| `/channelindex @channel` | Continue up to the latest post observed by the bot |
 | `/cancelindex` | Admin only: stop the current scan and retain progress |
-| `/catalog`, `/index` without arguments | Open public Index and protected Link files |
-| `/setpassword <new password>` | Owner only: change the shared Link password and invalidate existing sessions |
+| `/catalog` | Get a one-time sign-in link for your library |
+| `/index` | Start or finish a folder of personal uploads |
+| `/index Folder name` | Set the name when starting or finishing a personal folder |
 | `/privacy` | Explain stored data and link access |
 
 Administrator commands include `/stats`, `/workers`, `/log`, `/sync_duration`,
@@ -134,8 +135,8 @@ people you trust with the server.
 Automatic channel indexing: add the bot as an admin and send the latest post link. See [CHANNEL_INDEX.md](CHANNEL_INDEX.md) for setup, metadata credentials, resume and cancellation.
 
 ```text
-/index https://t.me/c/1234567890/5000
-/index @YourChannel
+/channelindex https://t.me/c/1234567890/5000
+/channelindex @YourChannel
 /cancelindex
 ```
 
@@ -151,8 +152,7 @@ Automatic channel indexing: add the bot as an admin and send the latest post lin
 | `/dl/<code>` | Download; add `?stream=1` for inline media |
 | `/api/file/<code>` | File details and links |
 | `/api/batch/<code>` | Batch details and episode links |
-| `/index` | Public Index tab and password-protected Link tab, search, pagination and multi-file ZIP downloads |
-| `/api/movies` | Movie catalog response; requires a Link login cookie |
+| `/index` | Personal upload library, with Index folders and Single files |
 
 Anyone holding a valid media URL can access it. Telegram user restrictions
 apply to bot commands, not HTTP playback. Index and share media you have
@@ -168,145 +168,20 @@ docker run -d --name gatestream -p 8080:7860 --env-file .env -e PORT=7860 --rest
 Set `BASE_URL` for the public address mapped to this container. For Spaces, use `GateStream-HuggingFace.zip`; its README includes the Docker
 SDK metadata and port `7860` configuration.
 
-## Public Index and protected Link
+## Personal library and ZIP downloads
 
-Open `/index` on your server or Worker, or send `/index` to the Telegram bot.
-There are two tabs:
+Sign in at `/index` with a one-time link from the bot's `/catalog` command.
+Uploads outside an index session appear under **Single files**. Start and finish
+a folder with `/index`, then open the folder to rename it or download its ZIP.
 
-| Tab | Files | Access |
-| --- | --- | --- |
-| **Index** (`/index`) | Automatically scanned channel files plus existing indexed batches and episodes | Public; no password or Telegram login |
-| **Link** (`/index?section=link`) | Single-file links created by `/link`, its movie/anime/series aliases, and direct bot uploads | Shared password required |
+Folder ZIPs offer **Prepare first** and **Start immediately**. Both modes
+support HTTP ranges, resuming, and multiple connections. Archive tickets
+expire after 24 hours and depend on the temporary ZIP cache. Adjust
+`ZIP_CACHE_MAX_MB` and available disk space for large folders. Anyone with
+the share link can download the folder.
 
-Existing records without a section flag keep their original rule: batches go
-to Index and single-file records go to Link. New `/index` scans create public
-records, while `/link` records stay private. This keeps old `/link` files out of the public
-listing. New records also store their section explicitly. Media category filters
-(Movies, Anime, Web series, Direct files), filename/batch-title search and
-pagination work within each tab, with 30 files per page.
-
-Select individual checkboxes or **Select all on page**, optionally enter a
-**ZIP name** without its extension, then press **Download ZIP** to receive up to 30 files in one ZIP. Selection applies to the current
-page; changing the page or filters resets it. The server checks every selected
-code against its section, so a public ZIP request cannot include private Link
-records. ZIP64 supports large files.
-
-Version 2.0.7 retains two choices before downloading selected files:
-
-| Option | Starts | Resume and multiple connections |
-| --- | --- | --- |
-| **Start immediately** (default) | Sends available ZIP bytes while the shared archive is still being built | Yes; later ranges wait for their bytes |
-| **Prepare first** | Waits for the complete temporary ZIP, showing progress | Yes, with all ranges ready |
-
-The compact Library / Private links controls accept a custom ZIP name before
-starting either mode. `.zip` is appended automatically (pasting the extension
-also works), Unicode names are supported, and unsafe filename characters are
-removed/replaced. Blank uses the previous `GateStream-index.zip` /
-`GateStream-link.zip` default. A name is at most 120 characters and 240 UTF-8
-bytes before the extension. The canonical name is stored in the download ticket
-and used for GET, HEAD, resume/ranges and prepared redirects. It never becomes
-a local cache path. Existing download links remain valid.
-
-Immediate mode now writes one shared temporary ZIP in the background. The first
-connection can read the opening bytes before the ZIP finishes; concurrent range
-requests read the same stable bytes and never start duplicate Telegram fetches.
-HEAD, Content-Length, 206 ranges, suffix/open ranges, ETags and If-Range work
-before and after completion. Pausing a client does not stop the shared builder.
-A connection requesting bytes not yet built waits for them; more connections do
-not make Telegram preparation faster. A manager/proxy may time out a waiting
-range and retry. Prepared mode avoids these preparation waits during download.
-
-Both modes reserve their total size in the same 8 GiB temporary-disk budget.
-Up to two live ZIP builders run independently of the one-at-a-time preparation
-queue. Extra live jobs or selections exceeding capacity fail with a clear
-message. All clients share one builder per ticket, so connection count does not
-multiply Telegram source reads. Since 2.0.6, each builder overlaps up to four
-continuous 4 MiB Telegram range streams instead of feeding the ZIP through one
-serial source stream. Ordered queues bound buffering to roughly 16–20 MiB per
-builder. A stalled range retries from its last complete chunk, preserving byte
-order without duplicating already read data. The first real chunk warms each
-worker’s media session before overlapping range reads, avoiding concurrent
-session-start races. Browser playback and individual
-file downloads retain their existing paths. Detached head/tail prefetch is
-skipped for internal ZIP reads, avoiding extra competing requests.
-
-The live download panel shows ZIP buffer percentage and its five-second fill
-rate. This measures bytes arriving in the ZIP cache, not your phone's download
-speed. If the fill rate drops while the client is waiting, the source side is
-the limiting stage; if the ZIP is fully buffered, remaining variability is in
-disk serving, the proxy, or the client/network. Parallel reads overlap latency
-but cannot guarantee constant bandwidth or remove Telegram/hosting limits. GET links last 24 hours and retain the same
-section and password-revocation rules. Older streaming links remain single
-connection; make a new selection to use the live range support.
-
-The following completed-file details apply to **Prepare first**.
-
-Selected files are prepared into one temporary, uncompressed ZIP before the
-client download starts. The page shows queued/preparing progress and
-automatically starts the download when ready. Preparation uses continuous
-Telegram reads with stalled-read recovery; it does not keep whole files in RAM.
-The completed ZIP is immutable and served from disk, so clients can pause,
-resume, and use multiple simultaneous connections without rebuilding the ZIP or
-rereading earlier Telegram data. Preparation traffic is not counted as bytes
-sent to viewers; actual ZIP downloads are counted by the activity dashboard.
-Actual download speed still depends on the host, proxy and network.
-
-The **Download ZIP** and **Copy download link** controls provide a GET `.zip`
-URL that works without browser cookies or POST data. HEAD, byte ranges, 206
-responses, ETags and If-Range validators are supported. Suffix/open-ended ranges
-work, and invalid or multipart ranges receive 416. Download managers can use
-multiple connections (start with four). The completed archive is retained until its link
-expires, 24 hours after selection. Anyone holding the URL can download its
-selected files during that time. Changing the Link password invalidates private
-ZIP links, including subsequent range requests. Removing or changing a selected
-catalog record also prevents new requests.
-
-Both ZIP modes have a shared 8 GiB disk budget, configurable with
-`ZIP_CACHE_MAX_MB`; `ZIP_CACHE_DIR` optionally chooses its directory. One prepared-mode ZIP is
-built at a time, alongside at most two live builds, to keep memory bounded. Space is
-reserved for queued jobs, and requests exceeding the budget or available free
-disk fail with a clear message. Unexpired ZIPs are not evicted to make room;
-expired files and interrupted preparations are cleaned on subsequent selections.
-If capacity is full, select fewer files, wait for expiry, or increase the budget
-where disk space permits. A host rebuild can remove temporary storage; completed
-ZIPs can resume after a normal process restart when their files remain. If a ZIP
-is lost, its old link fails with 410 instead of silently generating different
-bytes under the same URL. Choose a fresh selection after a rebuild or failure.
-If a live build is interrupted before completion, its partial file is removed;
-choose a new selection. A completed ZIP retains the same ETag after a normal
-process restart if its cached file survives.
-
-The initial **Link** password is **`Siam`** (case-sensitive). If you previously
-changed it, that saved password is retained. The account whose Telegram ID
-matches `OWNER_ID` can change it in a private bot chat:
-
-```text
-/setpassword Your new password
-```
-
-`/indexpassword` is an alias. Passwords can contain spaces and must be 1–256
-characters. Other administrators cannot change it. The bot confirms the change
-without repeating the password and attempts to delete the command message.
-
-A salted scrypt hash and signing secret persist in the MongoDB `settings`
-collection under `index_access`. Signed HttpOnly/SameSite login cookies last
-eight hours and are Secure on HTTPS. Changing the password invalidates existing
-Link sessions. Login/logout/download forms have CSRF protection, repeated login
-attempts are limited, and catalog responses are uncached. Public Index browsing
-works without initializing password settings; Link access fails closed if
-settings are unavailable.
-
-The bulk `/api/movies` endpoint requires a Link login cookie. Existing per-file
-and batch APIs, stream links and individual download URLs retain their sharing
-behavior: the password protects Link catalog discovery. Visitors do not need a
-Telegram account. The Cloudflare Worker forwards POST forms only for catalog
-login, logout and selected downloads; redeploy it with this update.
-
-The `/backup` command exports media collections, including new section fields,
-not access settings, scan checkpoints, or temporary download tickets and ZIP cache files. When
-migrating only that backup, set the Link password again and restart any scan;
-existing public records are reused. Moving the full database preserves settings
-and checkpoints.
+Find indexed channel files using the bot's `/search` and `/search_api`
+commands. Download and stream links work by file code.
 
 ## Automatic media categories
 
@@ -480,7 +355,7 @@ request cannot silently wait for several minutes behind the Worker. ZIP building
 continues separately and is not limited to 25 seconds.
 The no-JavaScript preparation page also displays prepared/total sizes.
 
-Checks: `node --test tests/catalog_progress.test.cjs` in either package, plus
+Checks for this release also included
 the existing Python suite and the GitHub package's Worker tests. Live host
 performance has not been measured. User notices and the complete Drive removal
 remain intact; database settings and Hugging Face README metadata are unchanged.
@@ -539,3 +414,40 @@ ZIP preparation, completion counters, user notices and complete Drive removal
 remain intact. Database names/settings and HF metadata are preserved. Tests
 simulate expired references and interrupted streams; live Telegram recovery
 still needs verification on the deployment.
+
+## v2.0.14 — Preserve APK downloads
+
+APK links serve the Android package media type and keep their `.apk` filename.
+The download route uses the filename to resolve generic media types, and new
+APK uploads retain their Telegram filename even when the message has a caption.
+Deploy the updated Python origin to apply the fix to existing APK links.
+
+## v2.0.15 — Personal upload library
+
+1. Send `/index` in a private chat with the bot to start a folder.
+2. Send up to 500 files, then send `/index My folder name`. The bot replies
+   with a shareable ZIP link. A second `/index` without a name uses the name
+   set at the start or the default name.
+3. Send `/catalog` for a one-time browser sign-in link. The **Index** tab
+   shows your finished folders. Open a folder to download individual files,
+   rename the folder and its ZIP, or use the ZIP link.
+4. Upload outside an index session to find the file under **Single files**.
+
+Personal uploads use the configured `TELEGRAM_CHANNEL_ID` storage channel.
+Earlier direct uploads with a recorded owner in that channel appear under
+**Single files**. Telegram search excludes the storage channel and personal
+uploads. Anyone with a direct download link or a shared folder ZIP
+link can use it. The library listing and folder renaming require sign-in.
+
+ZIP downloads retain preparation progress and HTTP range support. Large
+folders need enough disk space and may require a larger `ZIP_CACHE_MAX_MB`.
+Deploy the updated Python origin and the updated Cloudflare Worker if you
+access GateStream through its Worker.
+
+## v2.0.16 — Personal library only
+
+The web channel catalog, its shared password commands, and its bulk movie
+listing API have been retired. Old catalog ZIP tickets expire on upgrade.
+The personal library, its folder ZIPs, Telegram channel scanning and search,
+and existing individual file links continue to work. Deploy the updated
+origin and Worker together. No database migration is needed.
