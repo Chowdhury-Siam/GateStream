@@ -2,7 +2,7 @@ from quart import Quart
 from uvicorn import Server as UvicornServer, Config
 from logging import getLogger
 from bot.config import Server, LOGGER_CONFIG_JSON
-from . import main, error, catalog
+from . import main, error, catalog, personal_library
 from bot.modules.activity_store import activity_store
 from bot.modules.archive_cache import archive_cache
 
@@ -28,6 +28,7 @@ async def after_serve():
 
 instance.register_blueprint(main.bp)
 instance.register_blueprint(catalog.bp)
+instance.register_blueprint(personal_library.bp)
 
 instance.register_error_handler(400, error.invalid_request)
 instance.register_error_handler(404, error.not_found)
