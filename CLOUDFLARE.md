@@ -109,21 +109,9 @@ without changing public URLs. For a new branded endpoint, optionally set
 `CLOUDFLARE_WORKER_NAME` to `gatestream-proxy`, deploy, then use the returned URL
 as your bot host’s `BASE_URL`.
 
-### Catalog forms and ZIP downloads
+### Personal library forms and ZIP downloads
 
-The Worker accepts GET/HEAD plus POST to `/index/login`, `/index/logout` and
-`/index/download`. It forwards form bodies, cookies and origin response headers
-without buffering streamed ZIPs. Other POST paths remain rejected. Redeploy the
-Worker after updating so the Link password and selected-download forms work.
-
-Selected-file POST requests now create a short-lived GET URL under
-`/index/archive/<token>/GateStream-<section>.zip`. GET and HEAD need no browser
-cookies because the unguessable ticket authorizes only that saved selection.
-The server supplies Content-Length and the Worker forwards it. ZIPs use one
-connection and cannot be resumed; do not enable forced parallel ranges for
-these URLs. Tickets expire after one hour and Link password changes invalidate
-private tickets. Do not share a ticket URL beyond its intended recipients.
-
-ZIP source reads are now pipelined concurrently inside GateStream, even though
-the ZIP uses one external HTTP connection. This server-side optimization needs
-a bot host update/restart; it does not require changing the Worker.
+The Worker forwards GET and HEAD, plus POST forms for personal library
+sign-in, sign-out, folder renaming, and shared ZIP preparation. It passes
+cookies, range headers, and streamed ZIP responses through to the origin.
+Deploy the Worker with the updated origin to apply the current route list.
