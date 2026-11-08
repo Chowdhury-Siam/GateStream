@@ -135,10 +135,7 @@ async def share_folder(folder_id):
     if request.method != 'POST':
         count = await library.folder_count(folder['user_id'], folder_id)
         return await page(shared=folder, total=count)
-    form = await form_data()
-    mode = form.get('mode', 'prepare')
-    if mode not in ('stream', 'prepare'):
-        abort(400, 'Choose a download mode.')
+    await form_data()
     files = []
     try:
         async with asyncio.timeout(25):
@@ -146,14 +143,10 @@ async def share_folder(folder_id):
             if not files:
                 return await page(410, shared=folder, total=0, error='This folder has no downloadable files.')
             filename = archive_filename(folder['name'])
-            token = await create_archive(files, mode, filename,
+            token = await create_archive(files, filename,
                                          folder_id=folder_id, user_id=folder['user_id'])
     except ValueError as error:
         return await page(413, shared=folder, total=len(files), error=str(error))
     except TimeoutError:
         abort(503, 'The server could not create the ZIP link in time. Please try again.')
-    if mode == 'stream':
-        link = url_for('catalog.download_archive', token=token, filename=filename)
-    else:
-        link = url_for('catalog.prepare_archive', token=token)
-    return redirect(link, code=303)
+    return redirect(url_for('catalog.download_archive', token=token, filename=filename), code=303)
