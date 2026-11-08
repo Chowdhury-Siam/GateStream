@@ -7,12 +7,14 @@ from bot import version
 from math import ceil
 from re import match as re_match, fullmatch
 from .error import abort
-from .catalog import authenticated
 from bot.clients import get_worker_client, TelegramBot, mark_worker_cooldown, worker_clients
 from bot.config import Telegram, Server
 from bot.database import db
 from bot.database.files import get_file, add_bandwidth_bytes
-from bot.modules.telegram import get_message, get_file_properties, get_media_chunk, iter_media_chunks, iter_parallel_ranges
+from bot.modules.telegram import (
+    get_message, get_file_properties, get_media_chunk, iter_media_chunks,
+    iter_parallel_ranges, resolve_file_mime,
+)
 from bot.modules.static import get_human_size
 from bot.modules.memory import flush_ram, check_memory_circuit_breaker
 from bot.modules.activity import activity
@@ -48,13 +50,6 @@ async def activity_stats():
     response.headers['Cache-Control'] = 'no-store, max-age=0'
     return response
 
-
-@bp.after_request
-async def private_catalog_api(response):
-    if request.path == '/api/movies':
-        response.headers['Cache-Control'] = 'private, no-store, max-age=0'
-        response.headers['Vary'] = 'Cookie'
-    return response
 
 # Malicious vulnerability scanners and abusive scrapers to block immediately
 BLOCKED_AGENTS = (
@@ -121,7 +116,7 @@ async def transmit_file(file_code, range_allowed=True, parallel=False, internal=
         msg = await get_target_msg()
         if not msg:
             abort(404, 'Media message not found in channel.')
-        f_name, f_size, m_type = get_file_properties(msg)
+        f_name, f_size, m_type, _, _ = get_file_properties(msg)
         file_name = file_name or f_name
         file_size = file_size or f_size
         mime_type = mime_type or m_type
@@ -143,19 +138,12 @@ async def transmit_file(file_code, range_allowed=True, parallel=False, internal=
 
     total_bytes_to_stream = end - start + 1
     content_length = total_bytes_to_stream
-    # Ensure a valid video MIME type so browsers stream inline instead of forcing a download
-    if not mime_type or mime_type == 'application/octet-stream':
-        if file_name and file_name.lower().endswith('.mkv'):
-            mime_type = 'video/x-matroska'
-        elif file_name and file_name.lower().endswith('.webm'):
-            mime_type = 'video/webm'
-        else:
-            mime_type = 'video/mp4'
+    mime_type = resolve_file_mime(file_name, mime_type)
 
-    # Default to 'attachment' so direct download links automatically download the file in browsers.
-    # Use 'inline' only when ?stream=1 or ?inline=1 is specified (e.g. by HTML5 video player in player.html).
+    # The player uses ?stream=1 or ?inline=1. Other file types are attachments
+    # so a guessed type such as text/html cannot render on the origin.
     is_streaming = False if internal else (request.args.get('stream') or request.args.get('inline')) and not (request.args.get('dl') or request.args.get('download'))
-    disposition = 'inline' if is_streaming else 'attachment'
+    disposition = 'inline' if is_streaming and mime_type.startswith(('video/', 'audio/')) else 'attachment'
 
     headers = {
         'Content-Type': mime_type,
@@ -602,27 +590,3 @@ async def api_get_file(file_code):
         'stream_url': f"{Server.BASE_URL}/stream/{code}",
         'download_url': f"{Server.BASE_URL}/dl/{code}"
     }), 200
-
-@bp.route('/api/movies')
-async def api_get_movies():
-    """Lists indexed movies."""
-    if not await authenticated():
-        return jsonify({'status': 'error', 'message': 'Sign in at /index?section=link to browse Link files.'}), 401, {'Cache-Control': 'no-store'}
-    if db.movies is None:
-        return jsonify({'status': 'error', 'message': 'Database not connected'}), 500
-    
-    cursor = db.movies.find().sort('created_at', -1).limit(100)
-    movies = []
-    async for doc in cursor:
-        code = doc.get('code', doc.get('_id'))
-        movies.append({
-            'code': code,
-            'file_name': doc.get('file_name', ''),
-            'file_size': doc.get('file_size', 0),
-            'size_formatted': get_human_size(doc.get('file_size', 0)),
-            'duration': doc.get('duration', 0),
-            'duration_formatted': doc.get('duration_formatted', 'N/A'),
-            'stream_url': f"{Server.BASE_URL}/stream/{code}",
-            'download_url': f"{Server.BASE_URL}/dl/{code}"
-        })
-    return jsonify({'status': 'success', 'count': len(movies), 'movies': movies}), 200
