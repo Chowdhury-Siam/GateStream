@@ -66,8 +66,10 @@ test('preserves origin errors and redirects; reports network failures as 502', a
   assert.equal((await worker.fetch(new Request('https://proxy.example/health'), env)).status, 502);
 });
 
-test('forwards catalog POST forms, cookies and body without buffering ZIP responses', async (t) => {
-  for (const path of ['/index/login', '/index/logout', '/index/download']) {
+test('forwards personal library POST forms, cookies and body without buffering ZIP responses', async (t) => {
+  const folder = 'a'.repeat(43);
+  for (const path of ['/index/sign-in', '/index/sign-out',
+                      '/index/share/' + folder, '/index/folder/' + folder + '/rename']) {
     const upstream = new Response('zip-or-login', { headers: { 'Set-Cookie': 'gatestream_index=session; HttpOnly', 'Cache-Control': 'private, no-store' } });
     t.mock.method(globalThis, 'fetch', async (url, options) => {
       assert.equal(url, 'https://origin.example' + path);
@@ -85,6 +87,10 @@ test('forwards catalog POST forms, cookies and body without buffering ZIP respon
     t.mock.restoreAll();
   }
   assert.equal((await worker.fetch(new Request('https://proxy.example/dl/code', { method: 'POST' }), env)).status, 405);
+  assert.equal((await worker.fetch(new Request('https://proxy.example/index/share/invalid', { method: 'POST' }), env)).status, 405);
+  for (const path of ['/index/login', '/index/logout', '/index/download']) {
+    assert.equal((await worker.fetch(new Request('https://proxy.example' + path, { method: 'POST' }), env)).status, 405);
+  }
 });
 
 test('anonymous download grouping survives separate ranges and overwrites caller keys', async (t) => {
