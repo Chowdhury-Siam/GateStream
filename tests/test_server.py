@@ -62,6 +62,48 @@ class ServerTests(unittest.IsolatedAsyncioTestCase):
             response = await instance.test_client().get('/dl/missing-code')
         self.assertEqual(response.status_code, 404)
 
+    async def test_download_uses_the_files_mime_type_for_full_and_range_requests(self):
+        apk_type = 'application/vnd.android.package-archive'
+        for name, stored_type, expected_type in (
+            ('App.apk', 'application/octet-stream', apk_type),
+            ('App.APK', 'video/mp4', apk_type),
+            ('App.apk', None, apk_type),
+            ('Archive.zip', 'application/octet-stream', 'application/zip'),
+            ('Page.html', 'application/octet-stream', 'text/html'),
+            ('Unknown.gatestreamtest', 'application/octet-stream', 'application/octet-stream'),
+            ('Movie.mp4', 'application/octet-stream', 'video/mp4'),
+            ('Movie.mkv', 'application/octet-stream', 'video/x-matroska'),
+        ):
+            with self.subTest(name=name, stored_type=stored_type):
+                doc = dict(file_name=name, file_size=6, mime_type=stored_type, channel_id=1, message_id=2)
+                message = SimpleNamespace(caption=None, document=SimpleNamespace(
+                    file_name=name, file_size=6, mime_type='application/octet-stream'))
+                with patch.multiple(main, get_file=AsyncMock(return_value=doc),
+                                    get_message=AsyncMock(return_value=message),
+                                    get_cached_chunk=AsyncMock(return_value=b'PK1234'),
+                                    is_chunk_cached=lambda *_: True, add_bandwidth_bytes=AsyncMock(),
+                                    flush_ram=lambda: None, check_memory_circuit_breaker=lambda: None):
+                    client = instance.test_client()
+                    head = await client.head('/dl/file')
+                    full = await client.get('/dl/file')
+                    partial = await client.get('/dl/file', headers={'Range': 'bytes=1-3'})
+                    playback = await client.head('/dl/file?stream=1')
+                for response, status in ((head, 200), (full, 200), (partial, 206)):
+                    self.assertEqual(response.status_code, status)
+                    self.assertEqual(response.headers['Content-Type'], expected_type)
+                    self.assertEqual(response.headers['Content-Disposition'], f'attachment; filename="{name}"')
+                disposition = 'inline' if expected_type.startswith('video/') else 'attachment'
+                self.assertEqual(playback.headers['Content-Disposition'], f'{disposition}; filename="{name}"')
+                self.assertEqual(await full.get_data(), b'PK1234')
+                self.assertEqual(await partial.get_data(), b'K12')
+
+    def test_apk_keeps_its_telegram_filename_when_it_has_a_caption(self):
+        message = SimpleNamespace(caption='Download the latest build', document=SimpleNamespace(
+            file_name='App.apk', file_size=6, mime_type='application/octet-stream'))
+        name, _, mime_type, _, _ = main.get_file_properties(message)
+        self.assertEqual(name, 'App.apk')
+        self.assertEqual(mime_type, 'application/vnd.android.package-archive')
+
 
 class TelegramReplyTests(unittest.IsolatedAsyncioTestCase):
     @classmethod
@@ -107,7 +149,8 @@ class TelegramReplyTests(unittest.IsolatedAsyncioTestCase):
                 )
                 properties = ('Movie.mp4' if video else 'Book.pdf', 1024, 'video/mp4' if video else 'application/pdf', 65 if video else 0, '01:05' if video else 'N/A')
                 with patch.object(self.files.Telegram, 'CHANNEL_ID', -1001234567890):
-                    with patch.object(self.files, 'get_file_properties', return_value=properties):
+                    with patch.object(self.files, 'get_file_properties', return_value=properties), \
+                         patch.object(self.files.library, 'active_folder', AsyncMock(return_value=None)):
                         with patch.object(self.files, 'save_file', AsyncMock(return_value={'code': 'test-code'})):
                             await self.files.handle_user_file.__wrapped__(None, message)
                 caption = status.edit_text.call_args.kwargs['text']
@@ -132,13 +175,13 @@ class RetiredPluginTests(unittest.TestCase):
         real_import=importlib.import_module
         def checked(name):
             imported.append(name)
-            if name in ('bot.plugins.drive','bot.plugins.settings'):
+            if name in ('bot.plugins.drive','bot.plugins.settings','bot.plugins.index_password'):
                 raise AssertionError('Retired plugin was loaded')
             return real_import(name)
         previous=os.getcwd()
         with tempfile.TemporaryDirectory() as directory:
             tree=Path(directory)/'bot/plugins';tree.mkdir(parents=True)
-            for name in ('drive','settings'):
+            for name in ('drive','settings','index_password'):
                 (tree/(name+'.py')).write_text('raise RuntimeError("retired code must not run")')
             try:
                 os.chdir(directory)
@@ -147,7 +190,7 @@ class RetiredPluginTests(unittest.TestCase):
             finally:
                 os.chdir(previous)
         self.assertIn('bot.plugins.channel_index',imported)
-        self.assertIn('bot.plugins.index_password',imported)
+        self.assertNotIn('bot.plugins.index_password',imported)
         self.assertNotIn('bot.plugins.drive',imported)
         self.assertNotIn('bot.plugins.settings',imported)
 
