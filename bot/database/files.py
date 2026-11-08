@@ -18,7 +18,8 @@ async def save_file(
     title: str = None,
     duration: int = 0,
     duration_formatted: str = "N/A",
-    metadata: dict = None
+    metadata: dict = None,
+    *, personal=False, personal_index_id=None,
 ) -> dict:
     """Saves a single movie or direct file."""
     collection = db.get_collection(category)
@@ -27,7 +28,7 @@ async def save_file(
     existing = await collection.find_one({
         'channel_id': channel_id,
         'message_id': message_id,
-        'catalog_section': {'$ne': 'index'}
+        'catalog_section': 'personal' if personal else {'$nin': ['index', 'personal']}
     })
     if existing:
         # Auto-detect if file in channel post was replaced or modified
@@ -67,11 +68,13 @@ async def save_file(
         'duration_formatted': duration_formatted,
         'user_id': user_id,
         'category': category.lower(),
-        'catalog_section': 'link',
+        'catalog_section': 'personal' if personal else 'link',
         'title': title or file_name,
         'created_at': datetime.utcnow()
     }
     
+    if personal_index_id is not None:
+        doc['personal_index_id'] = personal_index_id
     if metadata:
         doc['metadata'] = metadata
     await collection.insert_one(doc)
@@ -355,6 +358,8 @@ async def search_records(query: str, limit: int = 30) -> list[dict]:
 
     results = []
 
+    from bot.modules.personal_library import channel_catalog_filter
+    visible = channel_catalog_filter()
     # 1. Search in single files across movies, direct_files, and single anime/series
     for col, default_cat in (
         (db.movies, 'movies'),
@@ -363,7 +368,7 @@ async def search_records(query: str, limit: int = 30) -> list[dict]:
         (db.webseries, 'webseries')
     ):
         if col is not None and len(results) < limit:
-            query_cond = dict(single_filter)
+            query_cond = {**single_filter, **visible}
             if col in (db.anime, db.webseries):
                 query_cond['episodes'] = {'$exists': False}
 
@@ -390,7 +395,7 @@ async def search_records(query: str, limit: int = 30) -> list[dict]:
     # 2. Search in batches (anime, webseries)
     for col, cat_name in ((db.anime, 'anime'), (db.webseries, 'webseries')):
         if col is not None and len(results) < limit:
-            b_filter = dict(batch_filter)
+            b_filter = {**batch_filter, **visible}
             b_filter['episodes'] = {'$exists': True}
             cursor = col.find(b_filter).sort('created_at', -1).limit(limit - len(results))
 
