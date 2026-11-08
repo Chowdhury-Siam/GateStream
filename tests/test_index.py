@@ -51,7 +51,7 @@ class ArchiveRouteTests(unittest.IsolatedAsyncioTestCase):
         from datetime import datetime, timedelta, timezone
         token = 'a' * 43
         files = [dict(code='one', file_name='file.bin', file_size=4)]
-        ticket = dict(_id=token, section='personal', user_id=1, folder_id='d'*43, files=files, filename='My prepared ZIP.zip',
+        ticket = dict(_id=token, section='personal', user_id=1, folder_id='d'*43, files=files, filename='My prepared ZIP.zip', mode='prepare',
             archive_version=3, expires_at=datetime.now(timezone.utc)+timedelta(hours=24))
         storage = SimpleNamespace(find_one=AsyncMock(return_value=ticket))
         release = asyncio.Event()
@@ -92,10 +92,9 @@ class ArchiveRouteTests(unittest.IsolatedAsyncioTestCase):
             ticket['archive_version'] = 0
             self.assertEqual((await self.client.get(link,scheme='https')).status_code,410)
 
-    async def test_prepare_first_returns_ticket_before_source_finishes_and_exposes_byte_progress(self):
+    async def test_shared_folder_returns_live_ticket_even_from_an_old_prepare_form(self):
         from quart import Response
         from bot.server import main
-        from bot.modules.static import get_human_size
         entered, release = asyncio.Event(), asyncio.Event()
         tickets = {}
         async def insert(ticket): tickets[ticket['_id']] = ticket
@@ -122,6 +121,8 @@ class ArchiveRouteTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(response.status_code, 303)
             await asyncio.wait_for(entered.wait(), 1)
             token = next(iter(tickets))
+            self.assertEqual(tickets[token]['mode'], 'stream')
+            self.assertIn(f'/index/archive/{token}/', response.headers['Location'])
             status_url = f'/index/archive/{token}/status'
             status = await self.client.get(status_url, scheme='https')
             progress = await status.get_json()
@@ -130,12 +131,6 @@ class ArchiveRouteTests(unittest.IsolatedAsyncioTestCase):
             self.assertGreaterEqual(progress['bytes'], 32768)
             self.assertLess(progress['bytes'], progress['total'])
             self.assertGreater(progress['source_speed_bps'], 0)
-            token = next(iter(tickets))
-            fallback = await self.client.get(f'/index/prepare/{token}', scheme='https')
-            html = await fallback.get_data(as_text=True)
-            self.assertIn(get_human_size(progress['bytes']), html)
-            self.assertIn(get_human_size(progress['total']), html)
-            self.assertIn('%', html)
             release.set()
             await asyncio.wait_for(self.zip_cache.jobs[token]['task'], 1)
             ready = await (await self.client.get(status_url, scheme='https')).get_json()
