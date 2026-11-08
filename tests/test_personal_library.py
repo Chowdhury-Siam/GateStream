@@ -151,93 +151,73 @@ class PersonalLibraryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('Saved 50 files', close.reply.call_args.args[0])
         buttons = close.reply.call_args.kwargs['reply_markup'].inline_keyboard[0]
         self.assertEqual([(b.text, b.callback_data) for b in buttons], [
-            ('Prepare first', f'zip:prepare:{folder_id}'), ('Start immediately', f'zip:stream:{folder_id}'),
+            ('Start immediately', f'zip:stream:{folder_id}'),
         ])
 
-    async def test_telegram_zip_choice_waits_only_for_prepare_first(self):
+    async def test_telegram_zip_starts_before_the_archive_is_complete(self):
         from urllib.parse import urlsplit
         from hydrogram.enums import ChatType
 
         folder_id = 'a' * 43
         folder = dict(_id=folder_id, user_id=111, name='My ZIP')
         members = [dict(code='one', file_name='File.apk', file_size=4)]
-        for mode in ('prepare', 'stream'):
-            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as directory:
-                cache = ArchiveCache(directory, 1024 * 1024)
-                tickets = {}
-                release, source_open, animated, link_sent = (asyncio.Event() for _ in range(4))
-                progress_texts = []
+        with tempfile.TemporaryDirectory() as directory:
+            cache = ArchiveCache(directory, 1024 * 1024)
+            tickets = {}
+            release, source_open = asyncio.Event(), asyncio.Event()
 
-                async def insert(ticket):
-                    tickets[ticket['_id']] = ticket
+            async def insert(ticket):
+                tickets[ticket['_id']] = ticket
 
-                async def source(code, **options):
-                    self.assertTrue(options['internal'])
-                    async def body():
-                        yield b'PK'
-                        source_open.set()
-                        await release.wait()
-                        yield b'12'
-                    return Response(body(), headers={'Content-Length': '4'})
+            async def source(code, **options):
+                self.assertTrue(options['internal'])
+                async def body():
+                    yield b'PK'
+                    source_open.set()
+                    await release.wait()
+                    yield b'12'
+                return Response(body(), headers={'Content-Length': '4'})
 
-                async def edit(text, **options):
-                    if options['reply_markup'] is None:
-                        progress_texts.append(text)
-                        if len(progress_texts) >= 3:
-                            animated.set()
-                    else:
-                        link_sent.set()
-
-                message = SimpleNamespace(chat=SimpleNamespace(type=ChatType.PRIVATE),
-                    edit_text=AsyncMock(side_effect=edit))
-                query = SimpleNamespace(data=f'zip:{mode}:{folder_id}', message=message,
-                    from_user=SimpleNamespace(id=111), answer=AsyncMock())
-                storage = SimpleNamespace(insert_one=insert, find_one=AsyncMock(side_effect=lambda q: tickets.get(q['_id'])))
-                task = None
-                try:
-                    with patch.object(catalog, 'archive_cache', cache), \
-                         patch.object(library.db, 'db', {'download_tickets': storage}), \
-                         patch.object(library, 'folder_by_id', AsyncMock(return_value=folder)) as lookup, \
-                         patch.object(library, 'folder_files', AsyncMock(return_value=members)), \
-                         patch.object(main, 'transmit_file', side_effect=source), \
-                         patch.object(index_zip, '_PROGRESS_INTERVAL', .01):
-                        await callback.manage_callback(None, query)
-                        lookup.assert_awaited_once_with(folder_id, 111)
-                        query.answer.assert_awaited_once()
-                        task = index_zip._jobs[(111, folder_id)]
-                        await asyncio.wait_for(source_open.wait(), 1)
-                        if mode == 'prepare':
-                            await asyncio.wait_for(animated.wait(), 1)
-                            self.assertFalse(link_sent.is_set())
-                            self.assertNotEqual(progress_texts[-1][0], progress_texts[-2][0])
-                            await callback.manage_callback(None, query)
-                            self.assertIn('already', query.answer.call_args.args[0])
-                            release.set()
-                        await asyncio.wait_for(task, 1)
-                        self.assertTrue(link_sent.is_set())
-                        self.assertEqual(len(tickets), 1)
-                        token = next(iter(tickets))
-                        text, = message.edit_text.call_args.args
-                        button = message.edit_text.call_args.kwargs['reply_markup'].inline_keyboard[0][0]
-                        self.assertIn(button.url, text)
-                        path = urlsplit(button.url).path
-                        self.assertEqual(path, f'/index/archive/{token}/My%20ZIP.zip')
-                        if mode == 'stream':
-                            self.assertFalse(cache.jobs[token]['task'].done())
-                            self.assertEqual(progress_texts, [])
-                            part = await asyncio.wait_for(instance.test_client().get(path, headers={'Range': 'bytes=0-1'}), 1)
-                            self.assertEqual(part.status_code, 206)
-                            self.assertEqual(await part.get_data(), b'PK')
-                        release.set()
-                        await asyncio.wait_for(cache.jobs[token]['task'], 1)
-                        response = await instance.test_client().get(path)
-                        with ZipFile(io.BytesIO(await response.get_data())) as archive:
-                            self.assertEqual(archive.read('01-File.apk'), b'PK12')
-                finally:
-                    if task and not task.done():
-                        task.cancel()
-                        await asyncio.gather(task, return_exceptions=True)
-                    await cache.close()
+            message = SimpleNamespace(chat=SimpleNamespace(type=ChatType.PRIVATE),
+                edit_text=AsyncMock())
+            query = SimpleNamespace(data=f'zip:stream:{folder_id}', message=message,
+                from_user=SimpleNamespace(id=111), answer=AsyncMock())
+            storage = SimpleNamespace(insert_one=insert, find_one=AsyncMock(side_effect=lambda q: tickets.get(q['_id'])))
+            task = None
+            try:
+                with patch.object(catalog, 'archive_cache', cache), \
+                     patch.object(library.db, 'db', {'download_tickets': storage}), \
+                     patch.object(library, 'folder_by_id', AsyncMock(return_value=folder)) as lookup, \
+                     patch.object(library, 'folder_files', AsyncMock(return_value=members)), \
+                     patch.object(main, 'transmit_file', side_effect=source):
+                    await callback.manage_callback(None, query)
+                    lookup.assert_awaited_once_with(folder_id, 111)
+                    query.answer.assert_awaited_once()
+                    task = index_zip._jobs[(111, folder_id)]
+                    await asyncio.wait_for(source_open.wait(), 1)
+                    await asyncio.wait_for(task, 1)
+                    message.edit_text.assert_awaited_once()
+                    self.assertEqual(len(tickets), 1)
+                    token = next(iter(tickets))
+                    text, = message.edit_text.call_args.args
+                    button = message.edit_text.call_args.kwargs['reply_markup'].inline_keyboard[0][0]
+                    self.assertIn(button.url, text)
+                    path = urlsplit(button.url).path
+                    self.assertEqual(path, f'/index/archive/{token}/My%20ZIP.zip')
+                    self.assertFalse(cache.jobs[token]['task'].done())
+                    part = await asyncio.wait_for(instance.test_client().get(path, headers={'Range': 'bytes=0-1'}), 1)
+                    self.assertEqual(part.status_code, 206)
+                    self.assertEqual(await part.get_data(), b'PK')
+                    release.set()
+                    await asyncio.wait_for(cache.jobs[token]['task'], 1)
+                    response = await instance.test_client().get(path)
+                    with ZipFile(io.BytesIO(await response.get_data())) as archive:
+                        self.assertEqual(archive.read('01-File.apk'), b'PK12')
+            finally:
+                if task and not task.done():
+                    task.cancel()
+                    await asyncio.gather(task, return_exceptions=True)
+                await cache.close()
 
     async def test_telegram_zip_choice_rejects_other_users_folder(self):
         from hydrogram.enums import ChatType
@@ -247,6 +227,10 @@ class PersonalLibraryTests(unittest.IsolatedAsyncioTestCase):
             message=SimpleNamespace(chat=SimpleNamespace(type=ChatType.PRIVATE)), answer=AsyncMock())
         with patch.object(library, 'folder_by_id', AsyncMock(return_value=None)) as lookup, \
              patch.object(catalog, 'create_archive', AsyncMock()) as create:
+            await callback.manage_callback(None, query)
+            lookup.assert_not_awaited()
+            self.assertIn('Start immediately', query.answer.call_args.args[0])
+            query.data = f'zip:stream:{folder_id}'
             await callback.manage_callback(None, query)
         lookup.assert_awaited_once_with(folder_id, 222)
         self.assertTrue(query.answer.call_args.kwargs['show_alert'])
@@ -278,14 +262,16 @@ class PersonalLibraryTests(unittest.IsolatedAsyncioTestCase):
                      patch.object(main, 'transmit_file', side_effect=source):
                     path = f'/index/share/{folder_id}'
                     landing = await browser.get(path, scheme='https')
-                    self.assertIn('50 files', await landing.get_data(as_text=True))
+                    html = await landing.get_data(as_text=True)
+                    self.assertIn('50 files', html)
+                    self.assertNotIn('Prepare first', html)
                     self.assertEqual(tickets, {})
-                    response = await browser.post(path, form={'csrf': await csrf(landing), 'mode': 'prepare'}, scheme='https')
+                    response = await browser.post(path, form={'csrf': await csrf(landing)}, scheme='https')
                     self.assertEqual(response.status_code, 303)
                     token = next(iter(tickets))
                     await asyncio.wait_for(cache.jobs[token]['task'], 2)
-                    ready = await browser.get(response.headers['Location'], scheme='https')
-                    link = ready.headers['Location']
+                    self.assertEqual(tickets[token]['mode'], 'stream')
+                    link = response.headers['Location']
                     result = await manager.get(link, scheme='https')
                     self.assertEqual(result.status_code, 200)
                     self.assertIn('My fifty files.zip', result.headers['Content-Disposition'])
