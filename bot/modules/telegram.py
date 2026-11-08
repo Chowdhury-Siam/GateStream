@@ -184,7 +184,21 @@ def is_media_message(msg: Message) -> bool:
 
 from bot.modules.static import format_duration
 
-def get_file_properties(msg: Message) -> tuple[str, int, str, int, str]:
+def resolve_file_mime(file_name: str | None, mime_type: str | None) -> str:
+    name = (file_name or '').lower()
+    # The extension identifies APKs even if stored metadata is generic or wrong.
+    if name.endswith('.apk'):
+        return 'application/vnd.android.package-archive'
+    if mime_type and mime_type != 'application/octet-stream':
+        return mime_type
+    if name.endswith('.mkv'):
+        return 'video/x-matroska'
+    if name.endswith('.webm'):
+        return 'video/webm'
+    return guess_type(name)[0] or 'application/octet-stream'
+
+
+def get_file_properties(msg: Message, *, prefer_caption=True) -> tuple[str, int, str, int, str]:
     if not msg:
         return None, 0, 'application/octet-stream', 0, 'N/A'
         
@@ -218,18 +232,14 @@ def get_file_properties(msg: Message) -> tuple[str, int, str, int, str]:
                 duration = attr.duration
                 break
 
-    # Extract clean file_name:
-    # 1. Prefer message caption if it contains the episode/movie title as written in channel
-    if msg.caption:
+    # Keep the original package name for APKs. For other files, a caption can
+    # supply the episode or movie title as written in the channel.
+    if msg.caption and (prefer_caption or not file_name) and not (file_name or '').lower().endswith('.apk'):
         first_line = msg.caption.strip().split('\n')[0].strip()
         if 3 < len(first_line) < 200:
             file_name = first_line
-        else:
-            file_name = getattr(media, 'file_name', None)
-    else:
-        file_name = getattr(media, 'file_name', None)
 
-    # 2. Fallback to timestamp if neither caption nor media.file_name exists
+    # Fall back to a timestamp if neither caption nor media.file_name exists.
     if not file_name:
         file_format = {
             'video': 'mp4',
@@ -241,9 +251,7 @@ def get_file_properties(msg: Message) -> tuple[str, int, str, int, str]:
         date = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         file_name = f'{file_type}-{date}.{file_format}'
     
-    mime_type = getattr(media, 'mime_type', None)
-    if not mime_type:
-        mime_type = guess_type(file_name)[0] or 'application/octet-stream'
+    mime_type = resolve_file_mime(file_name, getattr(media, 'mime_type', None))
 
     duration_formatted = format_duration(duration)
 
