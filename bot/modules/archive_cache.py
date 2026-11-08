@@ -52,7 +52,7 @@ class ArchiveCache:
             if token in self.jobs:
                 return
             if progressive and sum(job['progressive'] and not job['task'].done() for job in self.jobs.values()) >= 2:
-                raise ValueError('Live ZIP capacity is full. Try again shortly or choose Prepare with resume.')
+                raise ValueError('Live ZIP capacity is full. Try again shortly.')
             used = await asyncio.to_thread(self._prune)
             reserved = sum(job['total'] for job in self.jobs.values() if not job['task'].done())
             if total + used + reserved > self.max_bytes or len(self.jobs) >= 128:
