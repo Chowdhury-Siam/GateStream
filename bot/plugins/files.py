@@ -1,4 +1,6 @@
+import asyncio
 from hydrogram import filters
+from hydrogram.errors import FloodWait
 from hydrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 from bot.clients import TelegramBot
 from bot.config import Telegram, Server
@@ -6,6 +8,7 @@ from bot.database.files import save_file
 from bot.modules.decorators import verify_user
 from bot.modules.telegram import get_file_properties
 from bot.modules.static import MediaLinksText, FileLinksText, get_human_size
+from bot.modules import personal_library as library
 
 @TelegramBot.on_message(
     filters.private
@@ -36,26 +39,33 @@ async def handle_user_file(_, msg: Message):
             quote=True
         )
 
-    status_msg = await msg.reply("⏳ *Processing file and generating links...*", quote=True)
-    
+    status_msg = None
     try:
-        # Copy to default storage / bin channel
-        forwarded = await msg.copy(chat_id=Telegram.CHANNEL_ID)
-        file_name, file_size, mime_type, duration, duration_formatted = get_file_properties(forwarded)
-        
-        # Save into MongoDB 'direct_files' collection
-        doc = await save_file(
-            channel_id=Telegram.CHANNEL_ID,
-            message_id=forwarded.id,
-            file_name=file_name,
-            file_size=file_size,
-            mime_type=mime_type,
-            user_id=msg.from_user.id,
-            category='direct_files',
-            duration=duration,
-            duration_formatted=duration_formatted
-        )
-        
+        user_id = msg.from_user.id
+        async with library.user_lock(user_id):
+            folder = await library.active_folder(user_id)
+            folder_id = folder['_id'] if folder else None
+            if folder_id and await library.folder_count(user_id, folder_id) >= library.MAX_FOLDER_FILES:
+                return await msg.reply('This index is full. Send /index to finish it before uploading more files.', quote=True)
+            if not folder_id:
+                status_msg = await msg.reply('⏳ *Processing file and generating links...*', quote=True)
+            try:
+                forwarded = await msg.copy(chat_id=Telegram.CHANNEL_ID)
+            except FloodWait as error:
+                if not 0 <= error.value <= 60:
+                    raise
+                await asyncio.sleep(error.value)
+                forwarded = await msg.copy(chat_id=Telegram.CHANNEL_ID)
+            file_name, file_size, mime_type, duration, duration_formatted = get_file_properties(forwarded, prefer_caption=False)
+            if not file_name or not file_size:
+                raise ValueError('The copied message did not contain a downloadable file.')
+            doc = await save_file(channel_id=Telegram.CHANNEL_ID, message_id=forwarded.id,
+                file_name=file_name, file_size=file_size, mime_type=mime_type, user_id=user_id,
+                category='direct_files', duration=duration, duration_formatted=duration_formatted,
+                personal=True, personal_index_id=folder_id)
+        if folder_id:
+            return
+
         code = doc['code']
         human_size = get_human_size(file_size)
         dl_link = f"{Server.BASE_URL}/dl/{code}"
@@ -95,5 +105,8 @@ async def handle_user_file(_, msg: Message):
             disable_web_page_preview=True
         )
 
-    except Exception as e:
-        await status_msg.edit_text(f"❌ Failed to process file: `{e}`")
+    except Exception:
+        if status_msg is not None:
+            await status_msg.edit_text('❌ Could not save this file. Please send it again.')
+        else:
+            await msg.reply('❌ Could not add this file to your index. Please send it again.', quote=True)
