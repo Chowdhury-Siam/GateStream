@@ -16,7 +16,7 @@ TelegramBot = Client(
     # Explicit imports keep retired plugins from loading after an overlay upgrade.
     plugins=dict(root='bot.plugins', include=[
         'admin', 'batch', 'callback', 'channel_index', 'commands', 'files',
-        'index_password', 'link', 'search',
+        'link', 'search',
     ]),
     sleep_threshold=-1,
     max_concurrent_transmissions=10,
