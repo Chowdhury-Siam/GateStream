@@ -172,7 +172,8 @@ SDK metadata and port `7860` configuration.
 
 Sign in at `/index` with a one-time link from the bot's `/catalog` command.
 Uploads outside an index session appear under **Single files**. Start and finish
-a folder with `/index`, then open the folder to rename it or download its ZIP.
+a folder with `/index`, then choose a ZIP download mode in Telegram. Open the
+folder in the library to rename it or download the ZIP from the web.
 
 Folder ZIPs offer **Prepare first** and **Start immediately**. Both modes
 support HTTP ranges, resuming, and multiple connections. Archive tickets
@@ -451,3 +452,11 @@ listing API have been retired. Old catalog ZIP tickets expire on upgrade.
 The personal library, its folder ZIPs, Telegram channel scanning and search,
 and existing individual file links continue to work. Deploy the updated
 origin and Worker together. No database migration is needed.
+
+## v2.0.17 — Choose the ZIP mode in Telegram
+
+After the final `/index`, choose **Prepare first** to see animated progress
+in Telegram and receive the link when the ZIP is complete. Choose
+**Start immediately** to get a direct download link while the ZIP builds.
+The Python origin runs both modes through the same resumable archive cache
+as the web library.
