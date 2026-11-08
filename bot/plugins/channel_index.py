@@ -9,7 +9,7 @@ from bot.modules.decorators import verify_user
 from bot.modules.parser import parse_telegram_link
 from bot.modules.channel_index import scan_channel
 from bot.modules import personal_library as library
-from bot.modules.index_zip import zip_choices
+from bot.modules.index_zip import start_zip_button
 
 logger = logging.getLogger('bot')
 # ponytail: one scan per process; use a database lease if running multiple bot processes.
@@ -120,14 +120,14 @@ async def personal_index(message, requested_name):
                     name = name or folder['name']
                     await library.finish_folder(folder, name)
                     share_id = folder['_id']
-                    text = (f'Saved {count} files in “{name}”. Choose how to download the ZIP. '
+                    text = (f'Saved {count} files in “{name}”. Tap Start immediately to get the ZIP link. '
                             'Anyone with the download link can use it.')
     except ValueError as error:
         return await message.reply(str(error), quote=True, parse_mode=enums.ParseMode.DISABLED)
     except Exception as error:
         logger.error('Personal index update failed (%s).', type(error).__name__)
         return await message.reply('The index could not be updated. Please try /index again shortly.', quote=True)
-    buttons = zip_choices(share_id) if share_id else None
+    buttons = start_zip_button(share_id) if share_id else None
     await message.reply(text, quote=True, parse_mode=enums.ParseMode.DISABLED, reply_markup=buttons,
                         disable_web_page_preview=True)
 
