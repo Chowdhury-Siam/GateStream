@@ -38,19 +38,19 @@ def archive_members(files):
     return [{key: item[key] for key in ('code', 'file_name', 'file_size')} for item in files]
 
 
-async def create_archive(files, mode, filename, *, folder_id, user_id):
+async def create_archive(files, filename, *, folder_id, user_id):
     from .main import transmit_file
 
     token = secrets.token_urlsafe(32)
     expires = datetime.now(timezone.utc) + timedelta(seconds=ARCHIVE_AGE)
-    ticket = dict(_id=token, section='personal', mode=mode, archive_version=3, filename=filename,
+    ticket = dict(_id=token, section='personal', mode='stream', archive_version=3, filename=filename,
                   files=archive_members(files), expires_at=expires, folder_id=folder_id, user_id=user_id)
     await db.db['download_tickets'].insert_one(ticket)
 
     async def download(code):
         return await transmit_file(code, range_allowed=False, internal=True, parallel=True)
 
-    await archive_cache.start(token, ticket['files'], download, expires.timestamp(), progressive=mode == 'stream')
+    await archive_cache.start(token, ticket['files'], download, expires.timestamp(), progressive=True)
     return token
 
 
