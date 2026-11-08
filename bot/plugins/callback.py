@@ -4,11 +4,14 @@ from bot.config import Telegram
 from bot.database.files import get_file, delete_file
 from bot.modules.decorators import verify_user
 from bot.modules.telegram import get_message
+from bot.modules.index_zip import select_zip
 
 @TelegramBot.on_callback_query()
 @verify_user
 async def manage_callback(bot, q: CallbackQuery):
-    query = q.data
+    query = q.data or ''
+    if query.startswith('zip:'):
+        return await select_zip(q)
 
     if query.startswith('rm_'):
         code = query[3:]
