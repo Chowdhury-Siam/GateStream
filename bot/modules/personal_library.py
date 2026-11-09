@@ -37,19 +37,22 @@ def _folders():
     return db.db['library_folders']
 
 
-async def active_folder(user_id, chat_id=None):
-    return await _folders().find_one({'user_id': user_id, 'chat_id': chat_id, 'state': 'collecting'})
+async def active_folder(user_id, chat_id=None, *, topic_id=None):
+    return await _folders().find_one(
+        {'user_id': user_id, 'chat_id': chat_id, 'topic_id': topic_id, 'state': 'collecting'})
 
 
 def folder_name(value):
     return archive_filename(value, 'Index').removesuffix('.zip')
 
 
-async def create_folder(user_id, name, chat_id=None):
+async def create_folder(user_id, name, chat_id=None, *, topic_id=None):
     folder = dict(_id=secrets.token_urlsafe(32), user_id=user_id, state='collecting',
                   name=name, created_at=datetime.now(timezone.utc))
     if chat_id is not None:
         folder['chat_id'] = chat_id
+    if topic_id is not None:
+        folder['topic_id'] = topic_id
     await _folders().insert_one(folder)
     return folder
 
