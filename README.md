@@ -79,7 +79,7 @@ do not upload a filled `.env` file.
 | `BASE_URL` | Outside Spaces | Public URL used in generated links; Spaces otherwise uses `SPACE_HOST` |
 | `DATABASE_NAME` | No | Catalog database; legacy default retained as `OmniArchiver` |
 | `MULTI_BOT_TOKENS` | No | Additional bot tokens, separated by spaces or commas |
-| `TELEGRAM_CHANNEL_ID` | No | Storage channel for direct uploads and first-start user notices |
+| `TELEGRAM_CHANNEL_ID` | No | Storage channel for uploads, first-start notices, and worker checks |
 | `TELEGRAM_BOT_USERNAME` | No | Username fallback; detected from the bot when connected |
 | `OMNI_MONGO_URI` | No | Compatibility setting for a separate upstream catalog |
 | `PORT` | No | `8080` locally; `7860` in the Docker image and on Spaces |
@@ -122,16 +122,25 @@ The bot starts with access for `OWNER_ID` only. The owner manages access with
 | Link a channel file | `/link [category] MESSAGE_LINK` (owner only) |
 
 Use a positive Telegram ID for a user and a negative ID for a group.
-A group grant applies in that group. Group members can open the bot menu
-and start and finish their own indexes. Open `/index`, send the files in
-the same group, and finish with `/index My folder`. For direct group posts,
-Telegram must deliver them to the bot. This works if the bot is a group admin
-or group privacy is disabled in BotFather and the bot is re-added to the group.
-With privacy mode enabled, send files as replies to the bot's index message.
-Outside an index, reply to a bot message to get an individual file link.
+### File To Link group topic
 
-Private chat and browser library sign-in require a direct user grant. The
-owner can always use the bot.
+1. As the bot owner, open the **File To Link** topic and send `/filetolink`.
+   This saves the group ID and topic ID. To select a different topic, run the
+   same command there.
+2. Use `/auth` in the topic to grant group access if the group is new to
+   GateStream. Existing group and user grants apply.
+3. Give the bot access to ordinary messages in the group. A bot that is a
+   group admin receives them. If you disable group privacy in BotFather,
+   re-add the bot to the group for the change to take effect.
+4. Post a file in the topic to receive its link automatically. Open `/index`
+   first to collect your uploads into a ZIP, then send `/index My folder`
+   in that topic. To request an individual link again, reply to one of your
+   own topic files with `/link`.
+
+The group file handler, `/index`, and `/link` are scoped to that one topic.
+Start a new group index after upgrading from a version that tracked drafts
+only by group. Private uploads and private `/index` are available with a
+direct user grant. The owner's private `/link` still links channel posts.
 
 Owner tools include `/stats`, `/workers`, `/workersetup`, `/workerrepair`, `/log`, `/sync_duration`,
 `/set_title`, `/revoke`, `/clean`, `/backup`, `/restore`, `/purge`,
@@ -140,8 +149,11 @@ and `/restart`.
 ## Worker membership and repair
 
 `/stats` shows connected bots, host resources, MongoDB library totals and live
-transfers. `/workers` lists channel IDs and reports confirmed present, missing,
-blocked, and unverified workers. Use `/workers CHANNEL_ID` for a specific channel.
+transfers. `/workers` asks every connected bot to post one silent check message
+to `TELEGRAM_CHANNEL_ID`. The private result lists only bots that could not
+post, with a reason such as offline, posting permission denied, or timed out.
+Use `/workers CHANNEL_ID` to send the check to a specific GateStream storage
+channel. A bot needs posting permission in the selected channel to pass.
 
 In the owner's private bot chat, send `/workersetup` or select **Set up worker
 repair** from the `/start` menu. Open the one-time HTTPS link and enter your
@@ -159,7 +171,8 @@ The session account must own the channel or have permission to add admins.
 GateStream adds only confirmed missing auxiliary bots, with minimal admin
 rights and at least 60 seconds between additions. It leaves existing members
 and blocked accounts alone. On a Telegram rate limit, the run stops and saves
-the retry time in MongoDB. Check the result with `/workers CHANNEL_ID`.
+the retry time in MongoDB. Repair grants minimal access for media reads.
+The log check also requires permission to post in its destination.
 
 ## HTTP endpoints
 
@@ -193,12 +206,14 @@ SDK metadata and port `7860` configuration.
 
 Sign in at `/index` with a one-time link from the bot's `/catalog` command.
 Uploads outside an index session appear under **Single files**. Start and finish
-a folder with `/index`. The final command shows the ZIP name, a preview of its
-files, a copyable URL, and a **Download** button.
+a folder with `/index`. The final command shows the ZIP name, file count,
+copyable URL, and a **Download** button.
 Open the folder in the library to rename it or download the ZIP from the web.
 
-Cached folder ZIPs can be downloaded while they are being built and support
-HTTP ranges, resuming, and multiple connections. If the archive cannot fit
+GateStream starts building a cached ZIP in the background when it creates
+the link. If both builders are busy, the ZIP queues and starts as soon as a
+slot opens. You can use the link while the ZIP builds, with HTTP range,
+resume, and multiple-connection support. If the archive cannot fit
 in the available cache, GateStream streams it directly in one connection.
 Direct streams restart from the beginning on retry. ZIP links expire after
 24 hours. Anyone with the share link can download the folder.
