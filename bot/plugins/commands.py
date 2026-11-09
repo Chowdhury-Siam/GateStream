@@ -8,10 +8,12 @@ from hydrogram.types import Message
 from bot.clients import TelegramBot, worker_clients
 from bot.config import Telegram
 from bot.database.files import get_stats, get_bandwidth_stats
-from bot.modules.static import WelcomeText, PrivacyText, get_human_size
+from bot.modules.static import get_human_size
 from bot.modules.decorators import verify_user, verify_admin
 from bot.modules.new_users import notify_new_user
 from bot.modules.personal_library import send_login_link
+from bot.modules.bot_menu import send_menu
+from bot.modules.access import group_id
 
 BOT_START_TIME = time.time()
 
@@ -31,26 +33,17 @@ def get_readable_time(seconds: int) -> str:
     
     return " ".join(result)
 
-@TelegramBot.on_message(filters.command(['start', 'help']) & filters.private)
+@TelegramBot.on_message(filters.command(['start', 'help']) & (filters.private | filters.group) & filters.text)
 @verify_user
 async def start_command(client, msg: Message):
-    if msg.command and msg.command[0].split('@', 1)[0].lower() == 'start' and msg.command[1:] == ['library']:
+    is_start = msg.command[0].split('@', 1)[0].lower() == 'start'
+    in_group = group_id(msg) is not None
+    if not in_group and is_start and msg.command[1:] == ['library']:
         await send_login_link(msg)
+    else:
+        await send_menu(msg, msg.from_user.id)
+    if not in_group and is_start:
         await notify_new_user(client, msg.from_user)
-        return
-    await msg.reply(
-        text=WelcomeText % {'first_name': msg.from_user.first_name},
-        quote=True,
-        disable_web_page_preview=True
-    )
-
-    if msg.command and msg.command[0].split('@', 1)[0].lower() == 'start':
-        await notify_new_user(client, msg.from_user)
-
-@TelegramBot.on_message(filters.command('privacy') & filters.private)
-@verify_user
-async def privacy_command(_, msg: Message):
-    await msg.reply(text=PrivacyText, quote=True, disable_web_page_preview=True)
 
 @TelegramBot.on_message(filters.command('stats') & filters.private)
 @verify_user
@@ -136,7 +129,7 @@ async def stats_command(_, msg: Message):
         f"📦 **Vault Summary:** `{total_titles} Titles` • `{total_files} Streamable Files`\n"
         f"{'─'*28}\n"
         f"🤖 **Active Worker Bots:** `{len(worker_clients)}`\n"
-        f"👑 **Admins Registered:** `{len(Telegram.ADMIN_IDS)}`\n"
+        f"👑 **Owner ID:** `{Telegram.OWNER_ID}`\n"
         f"⏱️ **System Uptime:** `{uptime}`\n"
         f"💓 **24/7 Heartbeat:** `{heartbeat_str}`\n"
         f"{'─'*28}\n"
