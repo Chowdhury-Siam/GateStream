@@ -25,7 +25,7 @@ export default {
     }
     const incoming = new URL(request.url);
     const formPost = request.method === 'POST' && (
-      ['/index/sign-in', '/index/sign-out'].includes(incoming.pathname) ||
+      ['/index/sign-in', '/index/sign-out', '/index/worker-setup'].includes(incoming.pathname) ||
       /^\/index\/(?:share\/[A-Za-z0-9_-]{43}|folder\/[A-Za-z0-9_-]{43}\/rename)$/.test(incoming.pathname)
     );
     if (!['GET', 'HEAD'].includes(request.method) && !formPost) {
