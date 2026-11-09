@@ -19,6 +19,9 @@ async def register_commands(client):
     private = [*common, BotCommand('catalog', 'Open your personal library')]
     owner = [*private, BotCommand('auth', 'Authorize a user or group'),
              BotCommand('unauth', 'Remove authorization'), BotCommand('stats', 'View server statistics'),
+             BotCommand('workers', 'Check worker channel membership'),
+             BotCommand('workersetup', 'Connect the repair account'),
+             BotCommand('workerrepair', 'Add missing workers to a channel'),
              BotCommand('link', 'Link a channel file')]
     for commands, scope in ((common, BotCommandScopeDefault()), (private, BotCommandScopeAllPrivateChats()),
                             (owner, BotCommandScopeChat(Telegram.OWNER_ID))):
@@ -47,5 +50,7 @@ async def send_menu(message, user_id):
     buttons.append([InlineKeyboardButton('My ID', callback_data='menu:id')])
     if is_owner(user_id):
         buttons[-1].append(InlineKeyboardButton('Manage access', callback_data='menu:access'))
+        if not in_group:
+            buttons.append([InlineKeyboardButton('Set up worker repair', callback_data='menu:workersetup')])
     await message.reply(text, quote=True, parse_mode=enums.ParseMode.DISABLED,
                         reply_markup=InlineKeyboardMarkup(buttons))
