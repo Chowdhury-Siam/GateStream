@@ -1,9 +1,11 @@
+import asyncio
 import os
 import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from hydrogram.enums import ChatType
+from hydrogram.types import Message
 
 with patch.dict(os.environ, {
     'TELEGRAM_API_ID': '12345', 'TELEGRAM_API_HASH': 'test_hash',
@@ -80,28 +82,50 @@ class AccessTests(unittest.IsolatedAsyncioTestCase):
             await personal_index.index_command(None, message)
             active.assert_awaited_once_with(USER, GROUP)
             create.assert_awaited_once_with(USER, 'GateStream-Index', GROUP)
-            self.assertIn('Reply to this message', message.reply.call_args.args[0])
+            self.assertIn('reply to this message', message.reply.call_args.args[0])
 
-        media = update(USER, chat=ChatType.SUPERGROUP, chat_id=GROUP, document=None,
-                       copy=AsyncMock(return_value=SimpleNamespace(id=42)))
-        media.reply_to_message = SimpleNamespace(from_user=SimpleNamespace(id=100))
-        client = SimpleNamespace(me=SimpleNamespace(id=100))
-        self.assertTrue(await files.is_reply_to_bot(None, client, media))
-        media.reply_to_message = update(USER)
-        self.assertFalse(await files.is_reply_to_bot(None, client, media))
-        media.reply_to_message = SimpleNamespace(from_user=SimpleNamespace(id=100))
+        audio = SimpleNamespace(file_name='Courtesy Call.flac', file_size=30300000,
+                                mime_type='audio/flac', duration=236)
+        copied = SimpleNamespace(id=42, audio=audio, caption=None)
+        media = update(USER, chat=ChatType.SUPERGROUP, chat_id=GROUP, audio=audio,
+                       copy=AsyncMock(return_value=copied))
+        client = SimpleNamespace(me=SimpleNamespace(id=100), loop=asyncio.get_running_loop(), executor=None)
+        self.assertTrue(await files.UPLOAD_MEDIA(client, Message(id=42, chat=media.chat, audio=audio)))
+        status = SimpleNamespace(edit_text=AsyncMock())
+        media.reply.return_value = status
+
+        async def active_folder(user_id, chat_id):
+            if (user_id, chat_id) == (USER, GROUP):
+                return {'_id': 'group-draft'}
+            return None
+
         with patch.object(access.Telegram, 'CHANNEL_ID', -1005678), \
-             patch.object(files.library, 'active_folder', AsyncMock(return_value={'_id': 'group-draft'})) as active, \
+             patch.object(files.library, 'active_folder', side_effect=active_folder) as active, \
              patch.object(files.library, 'folder_count', AsyncMock(return_value=0)), \
-             patch.object(files, 'get_file_properties', return_value=('File.apk', 4, 'application/octet-stream', 0, 'N/A')), \
-             patch.object(files, 'save_file', AsyncMock()) as save:
+             patch.object(files, 'save_file', AsyncMock(return_value={'code': 'song'})) as save:
             await files.handle_user_file(client, media)
             active.assert_awaited_once_with(USER, GROUP)
             self.assertEqual(save.call_args.kwargs['personal_index_id'], 'group-draft')
             self.assertEqual(save.call_args.kwargs['user_id'], USER)
-            self.grants.clear()
+            self.assertEqual(save.call_args.kwargs['file_name'], audio.file_name)
+            self.assertEqual(save.call_args.kwargs['mime_type'], audio.mime_type)
+            media.reply.assert_not_called()
+
+            self.grants.add(GROUP - 1)
+            media.chat.id = GROUP - 1
             await files.handle_user_file(client, media)
+            self.assertEqual(save.await_count, 1)
             media.copy.assert_awaited_once()
+
+            media.reply_to_message = SimpleNamespace(from_user=SimpleNamespace(id=100))
+            await files.handle_user_file(client, media)
+            self.assertIsNone(save.call_args.kwargs['personal_index_id'])
+            status.edit_text.assert_awaited_once()
+
+            self.grants.clear()
+            media.chat.id = GROUP
+            await files.handle_user_file(client, media)
+            self.assertEqual(media.copy.await_count, 2)
 
     async def test_menu_callbacks_obey_chat_access_and_owner_permissions(self):
         self.grants.add(GROUP)
