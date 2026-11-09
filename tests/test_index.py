@@ -137,6 +137,49 @@ class ArchiveRouteTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(ready['state'], 'ready')
             self.assertEqual(ready['bytes'], ready['total'])
 
+    async def test_zip_streams_without_disk_when_it_cannot_fit_in_cache(self):
+        import io
+        from zipfile import ZipFile
+        from quart import Response
+        from bot.server import main
+
+        self.zip_cache.max_bytes = 1024
+        payload = b'x' * 2048
+        files = [dict(code='one', file_name='file.bin', file_size=len(payload))]
+        tickets = {}
+
+        async def insert(ticket):
+            tickets[ticket['_id']] = ticket
+
+        async def update(query, changes):
+            tickets[query['_id']].update(changes['$set'])
+
+        storage = SimpleNamespace(insert_one=insert, update_one=update,
+            find_one=AsyncMock(side_effect=lambda q: tickets.get(q['_id'])))
+        source = AsyncMock(return_value=Response(payload))
+        with patch.object(catalog.db, 'db', {'download_tickets': storage}), \
+             patch.object(library, 'folder_files', AsyncMock(return_value=files)), \
+             patch.object(main, 'transmit_file', source):
+            token = await catalog.create_archive(files, 'Oversize.zip', folder_id='d' * 43, user_id=1)
+            self.assertEqual(tickets[token]['mode'], 'direct')
+            path = f'/index/archive/{token}/Oversize.zip'
+            async with self.client.request(path, method='HEAD') as head:
+                await head.send(b'')
+                await head.send_complete()
+            self.assertEqual(head.headers['Accept-Ranges'], 'none')
+            source.assert_not_awaited()
+
+            response = await self.client.get(path, headers={'Range': 'bytes=2-'})
+            self.assertEqual(response.status_code, 200)
+            archive = await response.get_data()
+            self.assertEqual(int(head.headers['Content-Length']), len(archive))
+            with ZipFile(io.BytesIO(archive)) as z:
+                self.assertEqual(z.read('01-file.bin'), payload)
+                self.assertIsNone(z.testzip())
+            source.assert_awaited_once_with('one', range_allowed=False, internal=True, parallel=True)
+            self.assertFalse(self.zip_cache.jobs)
+            self.assertEqual(os.listdir(self.zip_directory.name), [])
+
     async def test_live_http_ranges_resume_before_and_after_archive_completion(self):
         from datetime import datetime, timedelta, timezone
         from quart import Response
