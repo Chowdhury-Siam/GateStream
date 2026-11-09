@@ -117,6 +117,8 @@ class PersonalLibraryTests(unittest.IsolatedAsyncioTestCase):
         folder_id = 'a' * 43
         draft = None
         uploads = []
+        folder_members = [dict(code=f'member-{i}', file_name=f'File {i} & extras.apk', file_size=10)
+                          for i in range(1, 51)]
 
         async def start(user_id, name, chat_id):
             nonlocal draft
@@ -148,7 +150,7 @@ class PersonalLibraryTests(unittest.IsolatedAsyncioTestCase):
              patch.multiple(library, create_folder=start, active_folder=active, finish_folder=finish, folder_count=count), \
              patch.object(files, 'get_file_properties', return_value=('File.apk', 10, 'application/octet-stream', 0, 'N/A')), \
              patch.object(files, 'save_file', side_effect=save), \
-             patch.object(library, 'folder_files', AsyncMock(return_value=[{'code': 'upload-1'}])) as members, \
+             patch.object(library, 'folder_files', AsyncMock(return_value=folder_members)) as members, \
              patch.object(catalog, 'create_archive', AsyncMock(return_value='b' * 43)) as create:
             await personal_index.index_command(None, message(111, '/index'))
             await asyncio.gather(*(files.handle_user_file(None, message(111)) for _ in range(50)),
@@ -160,10 +162,15 @@ class PersonalLibraryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([item['user_id'] for item in uploads if not item['personal_index_id']], [222, 111])
         self.assertTrue(all(item['personal'] for item in uploads))
         members.assert_awaited_once_with(111, folder_id)
-        create.assert_awaited_once_with([{'code': 'upload-1'}], 'My fifty files.zip', folder_id=folder_id, user_id=111)
-        self.assertEqual(close.reply.call_args.args[0],
-            f'<code>{library.Server.BASE_URL}/index/archive/{"b" * 43}/My%20fifty%20files.zip</code>')
-        self.assertNotIn('reply_markup', close.reply.call_args.kwargs)
+        create.assert_awaited_once_with(folder_members, 'My fifty files.zip', folder_id=folder_id, user_id=111)
+        url = f'{library.Server.BASE_URL}/index/archive/{"b" * 43}/My%20fifty%20files.zip'
+        text, = close.reply.call_args.args
+        self.assertIn('My fifty files.zip</b> · 50 files', text)
+        self.assertIn('File 1 &amp; extras.apk', text)
+        self.assertIn('… and 45 more', text)
+        self.assertIn(f'<code>{url}</code>', text)
+        button = close.reply.call_args.kwargs['reply_markup'].inline_keyboard[0][0]
+        self.assertEqual((button.text, button.url), ('Download', url))
 
     async def test_telegram_zip_starts_before_the_archive_is_complete(self):
         from urllib.parse import urlsplit
@@ -212,9 +219,10 @@ class PersonalLibraryTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(len(tickets), 1)
                     token = next(iter(tickets))
                     text, = message.edit_text.call_args.args
-                    self.assertTrue(text.startswith('<code>') and text.endswith('</code>'))
-                    self.assertNotIn('reply_markup', message.edit_text.call_args.kwargs)
-                    path = urlsplit(text.removeprefix('<code>').removesuffix('</code>')).path
+                    button = message.edit_text.call_args.kwargs['reply_markup'].inline_keyboard[0][0]
+                    self.assertEqual(button.text, 'Download')
+                    self.assertIn(f'<code>{button.url}</code>', text)
+                    path = urlsplit(button.url).path
                     self.assertEqual(path, f'/index/archive/{token}/My%20ZIP.zip')
                     self.assertFalse(cache.jobs[token]['task'].done())
                     part = await asyncio.wait_for(instance.test_client().get(path, headers={'Range': 'bytes=0-1'}), 1)
@@ -223,6 +231,7 @@ class PersonalLibraryTests(unittest.IsolatedAsyncioTestCase):
                     release.set()
                     await asyncio.wait_for(cache.jobs[token]['task'], 1)
                     response = await instance.test_client().get(path)
+                    self.assertIn('attachment', response.headers['Content-Disposition'])
                     with ZipFile(io.BytesIO(await response.get_data())) as archive:
                         self.assertEqual(archive.read('01-File.apk'), b'PK12')
             finally:
