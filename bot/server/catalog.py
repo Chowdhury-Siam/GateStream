@@ -1,3 +1,4 @@
+import asyncio
 from datetime import datetime, timedelta, timezone
 import logging
 import re
@@ -9,13 +10,14 @@ from werkzeug.sansio.http import is_resource_modified
 from bot.database import db
 from bot.modules import personal_library
 from bot.modules.static import get_human_size
-from bot.modules.archive import archive_size, archive_disposition
-from bot.modules.archive_cache import archive_cache, ARCHIVE_AGE
+from bot.modules.archive import archive_size, archive_disposition, stream_archive
+from bot.modules.archive_cache import archive_cache, ARCHIVE_AGE, ArchiveCapacityError
 from bot.modules.activity import activity
 from .error import abort
 
 bp = Blueprint('catalog', __name__)
 logger = logging.getLogger('server')
+_direct_stream_slots = asyncio.Semaphore(2)
 
 
 @bp.after_request
@@ -38,19 +40,24 @@ def archive_members(files):
     return [{key: item[key] for key in ('code', 'file_name', 'file_size')} for item in files]
 
 
-async def create_archive(files, filename, *, folder_id, user_id):
+async def _download_member(code):
     from .main import transmit_file
 
+    return await transmit_file(code, range_allowed=False, internal=True, parallel=True)
+
+
+async def create_archive(files, filename, *, folder_id, user_id):
     token = secrets.token_urlsafe(32)
     expires = datetime.now(timezone.utc) + timedelta(seconds=ARCHIVE_AGE)
     ticket = dict(_id=token, section='personal', mode='stream', archive_version=3, filename=filename,
                   files=archive_members(files), expires_at=expires, folder_id=folder_id, user_id=user_id)
-    await db.db['download_tickets'].insert_one(ticket)
-
-    async def download(code):
-        return await transmit_file(code, range_allowed=False, internal=True, parallel=True)
-
-    await archive_cache.start(token, ticket['files'], download, expires.timestamp(), progressive=True)
+    tickets = db.db['download_tickets']
+    await tickets.insert_one(ticket)
+    try:
+        await archive_cache.start(token, ticket['files'], _download_member, expires.timestamp(), progressive=True)
+    except ArchiveCapacityError:
+        # Keep the existing cache and its resumable links. Stream this ZIP on demand.
+        await tickets.update_one({'_id': token}, {'$set': {'mode': 'direct'}})
     return token
 
 
@@ -74,7 +81,10 @@ async def _archive_ticket(token):
 @bp.route('/index/archive/<string:token>/status')
 async def archive_status(token):
     ticket = await _archive_ticket(token)
-    state = archive_cache.status(token, archive_size(ticket['files']))
+    total = archive_size(ticket['files'])
+    if ticket.get('mode') == 'direct':
+        return jsonify(state='ready', bytes=0, total=total, source_speed_bps=0)
+    state = archive_cache.status(token, total)
     return jsonify(state), 200 if state['state'] == 'ready' else 202 if state['state'] in ('queued', 'preparing') else 410
 
 
@@ -82,7 +92,7 @@ async def archive_status(token):
 async def prepare_archive(token):
     ticket = await _archive_ticket(token)
     link = url_for('catalog.download_archive', token=token, filename=ticket['filename'])
-    if ticket.get('mode') == 'stream':
+    if ticket.get('mode') in ('stream', 'direct'):
         return redirect(link)
     state = archive_cache.status(token, archive_size(ticket['files']))
     if state['state'] == 'ready':
@@ -115,6 +125,14 @@ async def _archive_range(response, total):
     return bounds if response.status_code in (200, 206) else None
 
 
+async def _direct_zip(files):
+    from contextlib import aclosing
+
+    async with _direct_stream_slots, aclosing(stream_archive(files, _download_member)) as stream:
+        async for chunk in stream:
+            yield chunk
+
+
 @bp.route('/index/archive/<string:token>/<string:filename>')
 async def download_archive(token, filename):
     ticket = await _archive_ticket(token)
@@ -126,7 +144,22 @@ async def download_archive(token, filename):
         abort(503, 'The folder is temporarily unavailable. Please try again.')
     if archive_members(files) != ticket['files']:
         abort(409, 'A selected file changed or was removed. Select the files again.')
-    state = archive_cache.status(token, archive_size(ticket['files']))
+    total = archive_size(ticket['files'])
+    if ticket.get('mode') == 'direct':
+        if request.method == 'GET' and _direct_stream_slots.locked():
+            return 'ZIP downloads are busy. Try this link again shortly.', 503, {'Retry-After': '3'}
+        response = Response(content_type='application/zip')
+        response.content_length = total
+        response.headers['Content-Disposition'] = archive_disposition(name)
+        response.headers['X-Content-Type-Options'] = 'nosniff'
+        response.headers['Accept-Ranges'] = 'none'
+        if request.method == 'GET':
+            response.response = response.iterable_body_class(activity.track_stream(
+                _direct_zip(ticket['files']), total, f'zip:{token}',
+                download=('zip', 0, total, download_client())))
+        response.timeout = None
+        return response
+    state = archive_cache.status(token, total)
     if ticket.get('mode') == 'stream':
         if state['state'] not in ('queued', 'preparing', 'ready'):
             abort(410, 'The live ZIP is no longer available. Select the files again.')
