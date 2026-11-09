@@ -57,7 +57,7 @@ class AccessTests(unittest.IsolatedAsyncioTestCase):
         self.grants.discard(query['_id'])
 
     async def find_topic(self, query, projection):
-        return self.topic if query == self.topic else None
+        return self.topic if self.topic and query.get('_id') == self.topic['_id'] else None
 
     async def set_topic(self, key, update, *, upsert):
         self.topic = {**key, **update['$set']}
@@ -76,6 +76,32 @@ class AccessTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(await access.is_file_topic(owner))
         owner.message_thread_id = TOPIC + 1
         self.assertFalse(await access.is_file_topic(owner))
+
+    async def test_owner_menu_explains_inactive_file_topic_and_rebinding(self):
+        message = update(OWNER, chat=ChatType.SUPERGROUP, chat_id=GROUP, message_thread_id=TOPIC)
+        await bot_menu.send_menu(message, OWNER)
+        self.assertIn('No File To Link topic is saved', message.reply.await_args.args[0])
+
+        self.topic = {'_id': 'file_to_link', 'chat_id': GROUP, 'topic_id': TOPIC + 1}
+        await bot_menu.send_menu(message, OWNER)
+        self.assertIn('send /filetolink here to rebind it', message.reply.await_args.args[0])
+        await bot_menu.send_menu(message, USER)
+        self.assertNotIn('/filetolink', message.reply.await_args.args[0])
+
+        await commands.file_to_link_command(None, message)
+        await bot_menu.send_menu(message, OWNER)
+        buttons = message.reply.await_args.kwargs['reply_markup'].inline_keyboard
+        self.assertIn('Index', [button.text for row in buttons for button in row])
+        self.assertEqual(self.topic['topic_id'], TOPIC)
+
+        with patch.object(access.db.db['bot_settings'], 'find_one', AsyncMock(side_effect=RuntimeError)):
+            await bot_menu.send_menu(message, OWNER)
+            self.assertIn('Could not read the File To Link setting from MongoDB', message.reply.await_args.args[0])
+            self.assertFalse(await access.is_file_topic(message))
+
+        message.message_thread_id = None
+        await bot_menu.send_menu(message, OWNER)
+        self.assertIn('Telegram did not identify a forum topic', message.reply.await_args.args[0])
 
     async def test_only_owner_can_grant_users_and_groups_and_revoke(self):
         self.assertTrue(await access.has_access(OWNER))
