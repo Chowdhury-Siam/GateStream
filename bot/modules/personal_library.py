@@ -15,6 +15,7 @@ MAX_FOLDER_FILES = 500
 LOGIN_AGE = 5 * 60
 SESSION_AGE = 8 * 60 * 60
 COOKIE = 'gatestream_library'
+SETUP_COOKIE = 'gatestream_worker_setup'
 _locks = WeakValueDictionary()
 
 
@@ -130,35 +131,58 @@ def _token_query(token, kind):
     return {'_id': _digest(token), 'kind': kind, 'expires_at': {'$gt': datetime.now(timezone.utc)}}
 
 
-async def send_login_link(message, *, user_id=None):
+async def send_login_link(message, *, user_id=None, worker_setup=False):
     from hydrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
     user_id = user_id if user_id is not None else message.from_user.id
-    token = await _new_token(user_id, 'login', LOGIN_AGE)
-    url = f'{Server.BASE_URL}/index/sign-in#{token}'
-    await message.reply('Open this one-time link in the browser where you want to use your library. It expires in five minutes.',
-        quote=True, disable_web_page_preview=True,
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton('Sign in to my library', url=url)]]))
+    if worker_setup:
+        if user_id != Telegram.OWNER_ID:
+            return
+        if not Server.BASE_URL.startswith('https://'):
+            return await message.reply('Worker setup requires an HTTPS BASE_URL.', quote=True)
+        token = await _new_token(user_id, 'worker_setup_login', LOGIN_AGE)
+        url = f'{Server.BASE_URL}/index/sign-in?setup=workers#{token}'
+        text = 'Open the private setup page to connect your Telegram account for worker repair. The link expires in five minutes.'
+        label = 'Open worker setup'
+    else:
+        token = await _new_token(user_id, 'login', LOGIN_AGE)
+        url = f'{Server.BASE_URL}/index/sign-in#{token}'
+        text = 'Open this one-time link in the browser where you want to use your library. It expires in five minutes.'
+        label = 'Sign in to my library'
+    await message.reply(text, quote=True, disable_web_page_preview=True,
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(label, url=url)]]))
 
 
-async def exchange_login(token):
+async def exchange_login(token, *, worker_setup=False):
     if not valid_token(token):
         return None
-    record = await _sessions().find_one_and_delete(_token_query(token, 'login'))
-    if record and await has_access(record['user_id']):
-        return await _new_token(record['user_id'], 'session', SESSION_AGE)
+    kind = 'worker_setup_login' if worker_setup else 'login'
+    record = await _sessions().find_one_and_delete(_token_query(token, kind))
+    if record:
+        user_id = record['user_id']
+        if worker_setup:
+            if user_id == Telegram.OWNER_ID:
+                return await _new_token(user_id, 'worker_setup', 2 * LOGIN_AGE)
+        elif await has_access(user_id):
+            return await _new_token(user_id, 'session', SESSION_AGE)
     return None
 
 
-async def session_user(token):
+async def session_user(token, *, worker_setup=False):
     if not valid_token(token):
         return None
-    record = await _sessions().find_one(_token_query(token, 'session'))
-    if record and await has_access(record['user_id']):
-        return record['user_id']
+    kind = 'worker_setup' if worker_setup else 'session'
+    record = await _sessions().find_one(_token_query(token, kind))
+    if record:
+        user_id = record['user_id']
+        if worker_setup:
+            return user_id if user_id == Telegram.OWNER_ID else None
+        if await has_access(user_id):
+            return user_id
     return None
 
 
-async def end_session(token):
+async def end_session(token, *, worker_setup=False):
     if valid_token(token):
-        await _sessions().delete_one({'_id': _digest(token), 'kind': 'session'})
+        kind = 'worker_setup' if worker_setup else 'session'
+        await _sessions().delete_one({'_id': _digest(token), 'kind': kind})
