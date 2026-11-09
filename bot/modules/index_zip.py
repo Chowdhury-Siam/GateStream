@@ -6,6 +6,7 @@ from urllib.parse import quote
 
 from hydrogram.enums import ChatType, ParseMode
 from hydrogram.errors import MessageNotModified
+from hydrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from bot.config import Server
 from bot.modules import personal_library as library
@@ -41,7 +42,7 @@ async def select_zip(query):
     await query.answer()
 
 
-async def _zip_link_text(folder):
+async def _zip_reply(folder):
     from bot.server import catalog
 
     folder_id, user_id = folder['_id'], folder['user_id']
@@ -54,22 +55,36 @@ async def _zip_link_text(folder):
             token = await catalog.create_archive(files, name, folder_id=folder_id, user_id=user_id)
 
         url = f'{Server.BASE_URL}/index/archive/{token}/{quote(name, safe="")}'
-        return f'<code>{escape(url)}</code>'
+        count = len(files)
+        filenames = []
+        for item in files[:5]:
+            filename = ' '.join(item['file_name'].split())
+            if len(filename) > 100:
+                filename = filename[:99] + '…'
+            filenames.append(f'• {escape(filename)}')
+        if count > len(filenames):
+            filenames.append(f'… and {count - len(filenames)} more')
+        contents = '\n'.join(filenames)
+        text = (f'<b>ZIP download</b>\n<b>{escape(name)}</b> · {count} {"file" if count == 1 else "files"}\n\n'
+                f'{contents}\n\nCopy link\n<code>{escape(url)}</code>')
+        button = InlineKeyboardMarkup([[InlineKeyboardButton('Download', url=url)]])
+        return text, button
     except ValueError as error:
-        return f'Could not start the ZIP. {escape(str(error))}'
+        return f'Could not start the ZIP. {escape(str(error))}', None
     except Exception as error:
         logger.warning('Telegram ZIP request failed (%s).', type(error).__name__)
-        return 'Folder saved. Open it from /catalog to get a new ZIP link.'
+        return 'Folder saved. Open it from /catalog to get a new ZIP link.', None
 
 
 async def reply_zip(message, folder):
-    await message.reply(await _zip_link_text(folder), quote=True, parse_mode=ParseMode.HTML,
-                        disable_web_page_preview=True)
+    text, button = await _zip_reply(folder)
+    await message.reply(text, quote=True, parse_mode=ParseMode.HTML,
+                        disable_web_page_preview=True, reply_markup=button)
 
 
 async def _deliver_zip(message, folder):
-    text = await _zip_link_text(folder)
-    kwargs = dict(parse_mode=ParseMode.HTML, disable_web_page_preview=True)
+    text, button = await _zip_reply(folder)
+    kwargs = dict(parse_mode=ParseMode.HTML, disable_web_page_preview=True, reply_markup=button)
     try:
         await message.edit_text(text, **kwargs)
     except MessageNotModified:
