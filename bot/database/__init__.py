@@ -69,6 +69,7 @@ class MongoDatabase:
                 await self.db['library_sessions'].create_index('expires_at', expireAfterSeconds=0)
                 await self.db['library_folders'].create_index([('user_id', 1), ('state', 1), ('created_at', -1)])
                 await self.db['direct_files'].create_index([('user_id', 1), ('personal_index_id', 1), ('created_at', -1)])
+                await self.db['direct_files'].create_index('source_key', sparse=True)
             logger.info("MongoDB database indexes ensured.")
         except Exception as e:
             logger.warning("Error creating MongoDB indexes: %s", e)
