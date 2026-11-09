@@ -124,7 +124,7 @@ class AccessTests(unittest.IsolatedAsyncioTestCase):
         await bot_menu.send_menu(message, OWNER)
         buttons = message.reply.call_args.kwargs['reply_markup'].inline_keyboard
         self.assertEqual([button.text for row in buttons for button in row],
-                         ['Index', 'Library', 'My ID', 'Manage access'])
+                         ['Index', 'Library', 'My ID', 'Manage access', 'Set up worker repair'])
 
     async def test_access_fails_closed_when_mongo_is_unavailable(self):
         with patch.object(access.db, 'db', None):
