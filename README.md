@@ -26,9 +26,8 @@ Extract the ZIP and upload the **contents** of its project folder, so `README.md
 
 ## What you can do
 
-- **Index your channels.** Add one file with `/link`, or an episode range with `/batch`.
+- **Save Telegram files.** Upload a file directly or collect multiple files into a ZIP. The owner can also link a channel post with `/link`.
 - **Browse your uploads.** Sign in through Telegram at `/index` to see your ZIP folders and single files.
-- **Find your media.** Search movies, anime, series, and direct files from Telegram.
 - **Follow transfers live.** The home page shows active links, HTTP connections, byte counts, progress, speed, elapsed time and ETA.
 - **Watch your way.** Play in the browser, resume playback, or open VLC or MX Player.
 - **Share a link.** Create stream, download, and API URLs; revoke access by removing a link.
@@ -80,8 +79,6 @@ do not upload a filled `.env` file.
 | `BASE_URL` | Outside Spaces | Public URL used in generated links; Spaces otherwise uses `SPACE_HOST` |
 | `DATABASE_NAME` | No | Catalog database; legacy default retained as `OmniArchiver` |
 | `MULTI_BOT_TOKENS` | No | Additional bot tokens, separated by spaces or commas |
-| `AUTH_USERS` | No | Additional administrator IDs |
-| `ALLOWED_USER_IDS` | No | Telegram users allowed to issue commands; blank allows everyone |
 | `TELEGRAM_CHANNEL_ID` | No | Storage channel for direct uploads and first-start user notices |
 | `TELEGRAM_BOT_USERNAME` | No | Username fallback; detected from the bot when connected |
 | `OMNI_MONGO_URI` | No | Compatibility setting for a separate upstream catalog |
@@ -108,37 +105,31 @@ The GitHub version includes a workflow that accepts that setting as a repository
 Variable or Secret. Cloudflare credentials belong in GitHub Secrets. See the
 Cloudflare guide for all settings and the deployment steps.
 
-## Commands
+## Telegram access and commands
 
-| Command | What it does |
+The bot starts with access for `OWNER_ID` only. The owner manages access with
+`/auth` and `/unauth`. Grants are stored in the existing MongoDB database.
+
+| Action | Command |
 | --- | --- |
-| `/start`, `/help` | Show GateStream's command guide |
-| `/search <name>` | Search the media catalog |
-| `/search_api <name>` | Return API links for matching media |
-| `/link [category] <message_link>` | Index a channel file |
-| `/batch anime <start_link> <end_link>` | Index anime episodes |
-| `/batch series <start_link> <end_link>` | Index series episodes |
-| `/episodes <batch_code>` | List a batch's episodes |
-| `/channelindex <last_post_link>` | Automatically scan a channel, resume progress and identify media categories |
-| `/channelindex @channel` | Continue up to the latest post observed by the bot |
-| `/cancelindex` | Admin only: stop the current scan and retain progress |
-| `/catalog` | Get a one-time sign-in link for your library |
-| `/index` | Start or finish a folder of personal uploads |
-| `/index Folder name` | Set the name when starting or finishing a personal folder |
-| `/privacy` | Explain stored data and link access |
+| Authorize a user | `/auth USER_ID` or reply to their message with `/auth` |
+| Authorize a group | `/auth GROUP_ID` or send `/auth` in that group |
+| Revoke a grant | Use `/unauth` with the same ID, reply, or group |
+| Open the bot menu | `/start` or `/help` |
+| Open your personal library | `/catalog` in a private chat |
+| Start or finish a ZIP | `/index` or the **Index** button |
+| Finish a ZIP with a custom name | `/index My folder` |
+| Link a channel file | `/link [category] MESSAGE_LINK` (owner only) |
 
-Administrator commands include `/stats`, `/workers`, `/log`, `/sync_duration`,
-`/set_title`, `/revoke`, `/clean`, `/backup`, `/restore`, `/purge`, `/restart`,
-and `/sh`. `/sh` executes host commands, so grant administrator access only to
-people you trust with the server.
+Use a positive Telegram ID for a user and a negative ID for a group.
+A group grant applies in that group. Group members can open the bot menu,
+start and finish their own indexes, and upload by replying to a bot message
+with a file. Private chat and browser library sign-in require a direct
+user grant. The owner can always use the bot.
 
-Automatic channel indexing: add the bot as an admin and send the latest post link. See [CHANNEL_INDEX.md](CHANNEL_INDEX.md) for setup, metadata credentials, resume and cancellation.
-
-```text
-/channelindex https://t.me/c/1234567890/5000
-/channelindex @YourChannel
-/cancelindex
-```
+Owner tools include `/stats`, `/workers`, `/log`, `/sync_duration`,
+`/set_title`, `/revoke`, `/clean`, `/backup`, `/restore`, `/purge`,
+and `/restart`.
 
 ## HTTP endpoints
 
@@ -172,24 +163,23 @@ SDK metadata and port `7860` configuration.
 
 Sign in at `/index` with a one-time link from the bot's `/catalog` command.
 Uploads outside an index session appear under **Single files**. Start and finish
-a folder with `/index`, then tap **Start immediately** in Telegram. Open the
-folder in the library to rename it or download the ZIP from the web.
+a folder with `/index`. The final command replies with a copyable ZIP URL.
+Open the folder in the library to rename it or download the ZIP from the web.
 
-Folder ZIPs can be downloaded while they are being built. They support HTTP
-ranges, resuming, and multiple connections. Archive tickets
-expire after 24 hours and depend on the temporary ZIP cache. Adjust
-`ZIP_CACHE_MAX_MB` and available disk space for large folders. Anyone with
-the share link can download the folder.
+Cached folder ZIPs can be downloaded while they are being built and support
+HTTP ranges, resuming, and multiple connections. If the archive cannot fit
+in the available cache, GateStream streams it directly in one connection.
+Direct streams restart from the beginning on retry. ZIP links expire after
+24 hours. Anyone with the share link can download the folder.
 
-Find indexed channel files using the bot's `/search` and `/search_api`
-commands. Download and stream links work by file code.
+Existing channel download and stream links work by file code.
 
 ## Automatic media categories
 
 AniList identifies anime without a key. Optional host Secrets `MAL_CLIENT_ID`
 and `OMDB_API_KEY` enable MyAnimeList fallback and OMDb movie/series matching,
 including IMDb IDs and available Rotten Tomatoes ratings. Unknown/conflicting
-results remain Direct files. See [CHANNEL_INDEX.md](CHANNEL_INDEX.md).
+results remain Direct files.
 
 ## Live activity dashboard
 
@@ -318,7 +308,7 @@ Set the existing `TELEGRAM_CHANNEL_ID` to the destination channel and give the
 bot permission to post there. An allowed user's first private `/start` sends
 their Telegram-provided first/last name, user ID, username/profile link, language,
 Premium/verified/bot/restricted/scam/fake/deleted flags, available DC ID and
-first-start time (UTC). The welcome and `/privacy` explain the notice. The bot
+first-start time (UTC). The bot
 does not request or collect phone numbers, IP addresses, locations or contacts.
 Use a private channel if these notices should only be visible to administrators.
 
@@ -436,8 +426,7 @@ Deploy the updated Python origin to apply the fix to existing APK links.
 
 Personal uploads use the configured `TELEGRAM_CHANNEL_ID` storage channel.
 Earlier direct uploads with a recorded owner in that channel appear under
-**Single files**. Telegram search excludes the storage channel and personal
-uploads. Anyone with a direct download link or a shared folder ZIP
+**Single files**. Anyone with a direct download link or a shared folder ZIP
 link can use it. The library listing and folder renaming require sign-in.
 
 ZIP downloads retain preparation progress and HTTP range support. Large
@@ -466,3 +455,17 @@ as the web library.
 After the final `/index`, tap **Start immediately** for a direct ZIP link.
 The web library's **Download ZIP** button starts the same resumable download.
 Previously issued links can still resume while their archive remains cached.
+
+## v2.0.19 — Copyable ZIP links and large folders
+
+The final `/index` replies with the ZIP URL in a copyable code line. If the
+cache cannot reserve enough space, the link streams the ZIP when opened.
+Cached ZIPs retain resume and multiple connections.
+
+## v2.0.20 — Owner-managed access and bot menu
+
+Existing deployments start with owner-only Telegram access. The previous
+environment-based user lists no longer grant access. Use `/auth` in Telegram
+to grant access to each user or group. Existing file links and stored data
+remain usable. The bot now shows an Index, Library, and My ID menu, with
+an access-management button for the owner.
