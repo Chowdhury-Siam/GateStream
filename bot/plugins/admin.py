@@ -7,53 +7,6 @@ from hydrogram.types import Message
 from bot.clients import TelegramBot
 from bot.modules.decorators import verify_user, verify_admin
 
-@TelegramBot.on_message(filters.command(['sh', 'shell', 'exec']) & filters.private)
-@verify_user
-@verify_admin
-async def shell_command(_, msg: Message):
-    """Executes a terminal shell command directly from Telegram and returns the output."""
-    if len(msg.command) < 2:
-        return await msg.reply(
-            "💻 **Shell Terminal Command**\n\n"
-            "**Usage:**\n"
-            "• `/sh git pull origin main`\n"
-            "• `/sh pip install -r requirements.txt`\n"
-            "• `/sh ls -la`",
-            quote=True
-        )
-
-    cmd = msg.text.split(maxsplit=1)[1]
-    status_msg = await msg.reply(f"⏳ **Executing:** `{cmd}`", quote=True)
-
-    try:
-        process = await asyncio.create_subprocess_shell(
-            cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
-        )
-        stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=120)
-        output = (stdout.decode('utf-8', errors='replace') + stderr.decode('utf-8', errors='replace')).strip()
-
-        if not output:
-            output = "Command finished with exit code 0 (no output)."
-
-        if len(output) > 3800:
-            file_bytes = io.BytesIO(output.encode('utf-8'))
-            file_bytes.name = "output.txt"
-            await status_msg.delete()
-            await msg.reply_document(
-                document=file_bytes,
-                caption=f"📄 **Output for:** `{cmd[:60]}`",
-                quote=True
-            )
-        else:
-            await status_msg.edit_text(f"💻 **Output:**\n```bash\n{output}\n```")
-
-    except asyncio.TimeoutError:
-        await status_msg.edit_text("❌ **Execution Timed Out** (limit: 120 seconds).")
-    except Exception as e:
-        await status_msg.edit_text(f"❌ **Error executing command:** `{e}`")
-
 @TelegramBot.on_message(filters.command(['restart', 'reboot']) & filters.private)
 @verify_user
 @verify_admin
@@ -557,3 +510,58 @@ async def restore_database_command(client, msg: Message):
         await status.edit_text(f"❌ **Failed to restore backup:** `{e}`")
 
 
+
+
+@TelegramBot.on_message(filters.command(['set_title', 'rename', 'name']) & filters.private)
+@verify_admin
+async def set_title_command(_, msg: Message):
+    """Updates or sets the title for an existing anime/series batch or movie in MongoDB."""
+    from bot.database import db
+    from bot.config import Server
+
+    if len(msg.command) < 3:
+        return await msg.reply(
+            "🏷️ **Set / Rename Title Usage:**\n"
+            "• `/set_title <batch_id_or_keyword> <New Title Name>`\n\n"
+            "**Examples:**\n"
+            "• `/set_title 9af0276c 86: Eighty Six (Season 1)`\n"
+            "• `/set_title undertaker 86: Eighty Six`\n"
+            "• `/set_title first love First Love (Season 1)`",
+            quote=True
+        )
+
+    target_key = msg.command[1].strip()
+    new_title = msg.text.split(maxsplit=2)[2].strip()
+
+    status_msg = await msg.reply(f"⏳ *Searching and renaming to* **{new_title}**...", quote=True)
+
+    for col, cat_name in ((db.anime, 'ANIME'), (db.webseries, 'WEB SERIES'), (db.movies, 'MOVIE')):
+        if col is not None:
+            batch_doc = await col.find_one({
+                '$or': [
+                    {'_id': target_key},
+                    {'_id': {'$regex': f"^{target_key}", '$options': 'i'}},
+                    {'title': {'$regex': target_key, '$options': 'i'}},
+                    {'episodes.file_name': {'$regex': target_key, '$options': 'i'}},
+                    {'file_name': {'$regex': target_key, '$options': 'i'}}
+                ]
+            })
+
+            if batch_doc:
+                doc_id = batch_doc['_id']
+                await col.update_one({'_id': doc_id}, {'$set': {'title': new_title}})
+                
+                if cat_name in ('ANIME', 'WEB SERIES'):
+                    api_url = f"{Server.BASE_URL}/api/batch/{doc_id}"
+                else:
+                    api_url = f"{Server.BASE_URL}/api/file/{doc_id}"
+
+                return await status_msg.edit_text(
+                    f"✅ **Title Updated Successfully!**\n"
+                    f"━━━━━━━━━━━━━━━━━━━━━━━\n"
+                    f"🏷️ **New Title:** **{new_title}**\n"
+                    f"📁 **Category:** `{cat_name}`\n"
+                    f"⚡ **API Endpoint:** `{api_url}`\n\n"
+                )
+
+    await status_msg.edit_text(f"❌ Could not find any batch or movie matching `{target_key}` in database.")
