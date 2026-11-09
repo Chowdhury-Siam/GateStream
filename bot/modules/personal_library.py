@@ -9,6 +9,7 @@ from weakref import WeakValueDictionary
 from bot.config import Server, Telegram
 from bot.database import db
 from bot.modules.archive import archive_filename
+from bot.modules.access import has_access
 
 MAX_FOLDER_FILES = 500
 LOGIN_AGE = 5 * 60
@@ -31,28 +32,23 @@ def uploads_filter():
     return {'$or': sources}
 
 
-def channel_catalog_filter():
-    hidden = [{'catalog_section': 'personal'}]
-    if Telegram.CHANNEL_ID:
-        hidden.append({'channel_id': Telegram.CHANNEL_ID})
-    return {'$nor': hidden}
-
-
 def _folders():
     return db.db['library_folders']
 
 
-async def active_folder(user_id):
-    return await _folders().find_one({'user_id': user_id, 'state': 'collecting'})
+async def active_folder(user_id, chat_id=None):
+    return await _folders().find_one({'user_id': user_id, 'chat_id': chat_id, 'state': 'collecting'})
 
 
 def folder_name(value):
     return archive_filename(value, 'Index').removesuffix('.zip')
 
 
-async def create_folder(user_id, name):
+async def create_folder(user_id, name, chat_id=None):
     folder = dict(_id=secrets.token_urlsafe(32), user_id=user_id, state='collecting',
                   name=name, created_at=datetime.now(timezone.utc))
+    if chat_id is not None:
+        folder['chat_id'] = chat_id
     await _folders().insert_one(folder)
     return folder
 
@@ -134,15 +130,11 @@ def _token_query(token, kind):
     return {'_id': _digest(token), 'kind': kind, 'expires_at': {'$gt': datetime.now(timezone.utc)}}
 
 
-def _allowed(user_id):
-    return isinstance(user_id, int) and user_id > 0 and (user_id in Telegram.ADMIN_IDS
-        or not Telegram.ALLOWED_USER_IDS or str(user_id) in Telegram.ALLOWED_USER_IDS)
-
-
-async def send_login_link(message):
+async def send_login_link(message, *, user_id=None):
     from hydrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
-    token = await _new_token(message.from_user.id, 'login', LOGIN_AGE)
+    user_id = user_id if user_id is not None else message.from_user.id
+    token = await _new_token(user_id, 'login', LOGIN_AGE)
     url = f'{Server.BASE_URL}/index/sign-in#{token}'
     await message.reply('Open this one-time link in the browser where you want to use your library. It expires in five minutes.',
         quote=True, disable_web_page_preview=True,
@@ -153,7 +145,7 @@ async def exchange_login(token):
     if not valid_token(token):
         return None
     record = await _sessions().find_one_and_delete(_token_query(token, 'login'))
-    if record and _allowed(record['user_id']):
+    if record and await has_access(record['user_id']):
         return await _new_token(record['user_id'], 'session', SESSION_AGE)
     return None
 
@@ -162,7 +154,7 @@ async def session_user(token):
     if not valid_token(token):
         return None
     record = await _sessions().find_one(_token_query(token, 'session'))
-    if record and _allowed(record['user_id']):
+    if record and await has_access(record['user_id']):
         return record['user_id']
     return None
 
