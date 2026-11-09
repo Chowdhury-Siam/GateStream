@@ -15,8 +15,7 @@ TelegramBot = Client(
     parse_mode=enums.ParseMode.MARKDOWN,
     # Explicit imports keep retired plugins from loading after an overlay upgrade.
     plugins=dict(root='bot.plugins', include=[
-        'admin', 'batch', 'callback', 'channel_index', 'commands', 'files',
-        'link', 'search',
+        'access', 'admin', 'callback', 'commands', 'files', 'link', 'personal_index',
     ]),
     sleep_threshold=-1,
     max_concurrent_transmissions=10,
@@ -120,6 +119,8 @@ async def start_all_clients():
         Telegram.BOT_USERNAME = TelegramBot.me.username
         logger.info("Auto-detected Telegram Bot username: @%s", Telegram.BOT_USERNAME)
     await db.create_indexes()
+    from bot.modules.bot_menu import register_commands
+    await register_commands(TelegramBot)
 
     # Check and resolve pending restart notification
     if os.path.exists('.restart_state.txt'):
