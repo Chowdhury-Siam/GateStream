@@ -120,9 +120,10 @@ class NewUserTests(unittest.IsolatedAsyncioTestCase):
     async def test_start_integration_help_and_user_restriction(self):
         with patch.object(clients.TelegramBot, 'add_handler'):
             from bot.plugins import commands
+            from bot.modules import decorators
         message = SimpleNamespace(from_user=self.user, command=['start'], reply=AsyncMock())
         with patch.object(commands, 'notify_new_user', AsyncMock()) as notify:
-            with patch.object(commands.Telegram, 'ALLOWED_USER_IDS', []):
+            with patch.object(decorators, 'has_access', AsyncMock(return_value=True)):
                 for command in ('start', 'start@TestGateStreamBot'):
                     message.command = [command]
                     await commands.start_command(self.client, message)
@@ -132,8 +133,9 @@ class NewUserTests(unittest.IsolatedAsyncioTestCase):
                 message.command = ['help']
                 await commands.start_command(self.client, message)
                 notify.assert_not_awaited()
-            with patch.object(commands.Telegram, 'ALLOWED_USER_IDS', ['1']):
+            with patch.object(decorators, 'has_access', AsyncMock(return_value=False)):
                 message.command = ['start']
                 await commands.start_command(self.client, message)
                 notify.assert_not_awaited()
-        self.assertEqual(message.reply.await_count, 3)
+        self.assertEqual(message.reply.await_count, 4)
+        self.assertIn('has not granted', message.reply.call_args.args[0])
