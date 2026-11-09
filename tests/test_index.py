@@ -92,7 +92,7 @@ class ArchiveRouteTests(unittest.IsolatedAsyncioTestCase):
             ticket['archive_version'] = 0
             self.assertEqual((await self.client.get(link,scheme='https')).status_code,410)
 
-    async def test_shared_folder_returns_live_ticket_even_from_an_old_prepare_form(self):
+    async def test_shared_folder_returns_a_live_link_while_background_slots_are_busy(self):
         from quart import Response
         from bot.server import main
         entered, release = asyncio.Event(), asyncio.Event()
@@ -107,6 +107,19 @@ class ArchiveRouteTests(unittest.IsolatedAsyncioTestCase):
                 await release.wait()
                 yield b'b' * 32768
             return Response(body(), headers={'Content-Length': '65536'})
+        slots_open = asyncio.Event()
+
+        async def occupy_slot(code):
+            await slots_open.wait()
+            return Response(b'x')
+
+        blockers = [dict(code='blocker', file_name='blocker.bin', file_size=1)]
+        from bot.modules.archive_cache import ARCHIVE_AGE
+        from time import time
+        expires = time() + ARCHIVE_AGE
+        for token in ('a' * 43, 'b' * 43):
+            await self.zip_cache.start(token, blockers, occupy_slot, expires, progressive=True)
+
         folder_id = 'd' * 43
         path = f'/index/share/{folder_id}'
         folder = {'_id': folder_id, 'name': 'My folder', 'user_id': 1}
@@ -119,11 +132,17 @@ class ArchiveRouteTests(unittest.IsolatedAsyncioTestCase):
             response = await asyncio.wait_for(self.client.post(path,
                 form={'csrf': await csrf(landing), 'mode': 'prepare'}, scheme='https'), 1)
             self.assertEqual(response.status_code, 303)
-            await asyncio.wait_for(entered.wait(), 1)
             token = next(iter(tickets))
             self.assertEqual(tickets[token]['mode'], 'stream')
             self.assertIn(f'/index/archive/{token}/', response.headers['Location'])
+            self.assertFalse(entered.is_set())
             status_url = f'/index/archive/{token}/status'
+            queued = await self.client.get(status_url, scheme='https')
+            self.assertEqual(queued.status_code, 202)
+            self.assertEqual((await queued.get_json())['state'], 'queued')
+            slots_open.set()
+            # Releasing a builder starts the ZIP without a download request.
+            await asyncio.wait_for(entered.wait(), 1)
             status = await self.client.get(status_url, scheme='https')
             progress = await status.get_json()
             self.assertEqual(status.status_code, 202)
