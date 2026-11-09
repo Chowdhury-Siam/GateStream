@@ -82,6 +82,10 @@ web server. A MongoDB timeout in the logs usually means the endpoint's port, DNS
 TLS, or database network access rules are wrong. Missing required credentials
 produce an error listing variable names without printing their values.
 
+Worker repair is optional. Use `/workersetup` in the owner’s private bot chat
+to connect it through the Space’s HTTPS page. See
+[worker membership and repair](README.md#worker-membership-and-repair).
+
 ## Availability and storage
 
 Space-local sessions, logs, and media cache are temporary and may disappear after
