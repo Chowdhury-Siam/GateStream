@@ -1,10 +1,15 @@
 import asyncio
 import os
 import unittest
+from collections import defaultdict
+from io import BytesIO
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
+from hydrogram import raw, utils
+from hydrogram.dispatcher import Dispatcher
 from hydrogram.enums import ChatType
+from hydrogram.raw.core import TLObject
 from hydrogram.types import Message
 
 with patch.dict(os.environ, {
@@ -15,6 +20,7 @@ with patch.dict(os.environ, {
 }, clear=True):
     from bot.clients import TelegramBot
     from bot.modules import access, bot_menu
+    from bot.modules.forum_updates import install_forum_parser
     with patch.object(TelegramBot, 'add_handler'):
         from bot.plugins import access as commands, callback, files, personal_index
 
@@ -193,6 +199,81 @@ class AccessTests(unittest.IsolatedAsyncioTestCase):
             media.id = 45
             await files.handle_user_file(client, media)
             self.assertEqual(media.copy.await_count, 2)
+
+    async def test_forwarded_forum_file_and_link_reply_parse_without_topic_details(self):
+        def decode(obj):
+            return TLObject.read(BytesIO(obj.write()))
+
+        chat = decode(raw.types.Channel(id=1234, title='Forum', photo=raw.types.ChatPhotoEmpty(),
+                                       date=1, megagroup=True, forum=True))
+        user = decode(raw.types.User(id=USER, first_name='Uploader'))
+        chat_id = utils.get_channel_id(chat.id)
+        self.grants.add(chat_id)
+        self.topic = {'_id': 'file_to_link', 'chat_id': chat_id, 'topic_id': TOPIC}
+        peer = raw.types.PeerChannel(channel_id=chat.id)
+        sender = raw.types.PeerUser(user_id=USER)
+        document = raw.types.Document(id=1, access_hash=2, file_reference=b'ref', date=1,
+            mime_type='application/octet-stream', size=4, dc_id=2,
+            attributes=[raw.types.DocumentAttributeFilename(file_name='Episode.mkv')])
+        upload = decode(raw.types.Message(id=43, peer_id=peer, from_id=sender, date=1, message='Episode.mkv',
+            media=raw.types.MessageMediaDocument(document=document),
+            fwd_from=raw.types.MessageFwdHeader(date=1, from_id=raw.types.PeerUser(user_id=999)),
+            reply_to=raw.types.MessageReplyHeader(forum_topic=True, reply_to_msg_id=TOPIC)))
+        command = decode(raw.types.Message(id=44, peer_id=peer, from_id=sender, date=1, message='/link',
+            reply_to=raw.types.MessageReplyHeader(forum_topic=True, reply_to_msg_id=43, reply_to_top_id=TOPIC)))
+        payload = raw.types.messages.ChannelMessages(pts=1, count=1, messages=[upload],
+                                                    topics=[], chats=[chat], users=[user])
+        status = SimpleNamespace(edit_text=AsyncMock())
+        async def get_messages(chat_id, *, message_ids, replies):
+            self.assertEqual(message_ids, 43)
+            self.assertEqual(replies, 0)
+            return (await utils.parse_messages(client, payload, replies=replies))[0]
+
+        client = SimpleNamespace(message_cache=defaultdict(lambda: None),
+            get_messages=AsyncMock(side_effect=get_messages), send_message=AsyncMock(return_value=status),
+            send_cached_media=AsyncMock())
+        self.enterContext(patch.object(Message, '_parse', Message._parse))
+        install_forum_parser(client)
+        dispatcher = Dispatcher(client)
+
+        async def parse(message):
+            update = raw.types.UpdateNewChannelMessage(message=message, pts=1, pts_count=1)
+            parsed, _ = await dispatcher.update_parsers[type(update)](update, {USER: user}, {chat.id: chat})
+            return parsed
+
+        parsed = await parse(upload)
+        self.assertEqual(parsed.message_thread_id, TOPIC)
+        self.assertEqual(parsed.from_user.id, USER)
+        self.assertEqual(parsed.document.file_name, 'Episode.mkv')
+        client.get_messages.assert_not_awaited()
+
+        client.send_cached_media.return_value = SimpleNamespace(id=200, document=parsed.document, caption=None)
+        saved = dict(code='episode', file_name='Episode.mkv', file_size=4, mime_type='application/octet-stream')
+        with patch.object(access.Telegram, 'CHANNEL_ID', -1009999), \
+             patch.object(files, 'get_group_upload', AsyncMock(side_effect=[None, saved])), \
+             patch.object(files.library, 'active_folder', AsyncMock(return_value=None)), \
+             patch.object(files, 'save_file', AsyncMock(return_value=saved)) as save:
+            await files.handle_user_file(client, parsed)
+            self.assertIn('/dl/episode', status.edit_text.await_args.kwargs['text'])
+            self.assertEqual(save.await_args.kwargs['source_key'], f'{chat_id}:43')
+
+            client.message_cache.clear()
+            parsed_command = await parse(command)
+            self.assertEqual(parsed_command.message_thread_id, TOPIC)
+            self.assertEqual(parsed_command.reply_to_message.document.file_name, 'Episode.mkv')
+            await files.group_link_command(client, parsed_command)
+            self.assertIn('/dl/episode', client.send_message.await_args.kwargs['text'])
+            self.assertEqual(client.send_message.await_args.kwargs['message_thread_id'], TOPIC)
+            client.send_cached_media.assert_awaited_once()
+
+        client.get_messages.assert_awaited_once_with(chat_id, message_ids=43, replies=0)
+        sent = decode(raw.types.Message(id=45, peer_id=peer, from_id=sender, date=1, out=True, message='File ready',
+            reply_to=raw.types.MessageReplyHeader(forum_topic=True, reply_to_msg_id=44, reply_to_top_id=TOPIC)))
+        # The SDK also calls the parser directly after a send or edit.
+        result = await Message._parse(client=client, message=sent, users={USER: user}, chats={chat.id: chat})
+        self.assertEqual(result.message_thread_id, TOPIC)
+        self.assertEqual(result.reply_to_message.id, 44)
+        self.assertEqual(client.get_messages.await_count, 1)
 
     async def test_menu_callbacks_obey_chat_access_and_owner_permissions(self):
         self.grants.add(GROUP)
