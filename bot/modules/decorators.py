@@ -1,43 +1,32 @@
-from hydrogram import Client 
-from hydrogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
-from typing import Union, Callable
 from functools import wraps
-from bot.config import Telegram
-from bot.modules.static import UserNotInAllowedList, AdminOnlyText
 
-def verify_user(func: Callable):
-    @wraps(func)
-    async def decorator(client: Client, update: Union[Message, CallbackQuery], *args, **kwargs):
-        user_id = str(update.from_user.id if update.from_user else update.chat.id)
-        numeric_id = update.from_user.id if update.from_user else update.chat.id
+from hydrogram.types import CallbackQuery
 
-        # Admins always allowed
-        if numeric_id in Telegram.ADMIN_IDS:
-            return await func(client, update, *args, **kwargs)
+from bot.modules.access import group_id, has_access, is_owner
 
-        if not Telegram.ALLOWED_USER_IDS or user_id in Telegram.ALLOWED_USER_IDS:
-            return await func(client, update, *args, **kwargs)
-        elif isinstance(update, CallbackQuery):
-            return await update.answer(UserNotInAllowedList, show_alert=True)
-        elif isinstance(update, Message):
-            return await update.reply(
-                text=UserNotInAllowedList,
-                quote=True,
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton('Deploy GateStream', url='https://github.com/Chowdhury-Siam/GateStream')]])
-            )
-        
-    return decorator
 
-def verify_admin(func: Callable):
-    @wraps(func)
-    async def decorator(client: Client, update: Union[Message, CallbackQuery], *args, **kwargs):
-        numeric_id = update.from_user.id if update.from_user else (update.chat.id if update.chat else None)
-        
-        if numeric_id in Telegram.ADMIN_IDS:
-            return await func(client, update, *args, **kwargs)
-        elif isinstance(update, CallbackQuery):
-            return await update.answer(AdminOnlyText, show_alert=True)
-        elif isinstance(update, Message):
-            return await update.reply(text=AdminOnlyText, quote=True)
-        
-    return decorator
+def _access_guard(owner_only):
+    def decorate(func):
+        @wraps(func)
+        async def checked(client, update, *args, **kwargs):
+            callback = isinstance(update, CallbackQuery) or hasattr(update, 'answer')
+            message = getattr(update, 'message', None) if callback else update
+            user = getattr(update, 'from_user', None)
+            if not user or getattr(user, 'is_bot', False) or (not callback and getattr(message, 'sender_chat', None)):
+                return
+            allowed = is_owner(user.id) if owner_only else await has_access(user.id, group_id(message))
+            if allowed:
+                return await func(client, update, *args, **kwargs)
+            if callback:
+                return await update.answer('This action is restricted to the owner.' if owner_only
+                                           else 'The owner has not granted you access.', show_alert=True)
+            if owner_only or getattr(message, 'command', None):
+                await message.reply('Only the owner can use this command.' if owner_only
+                                    else 'The owner has not granted you access. Your Telegram ID is '
+                                         f'{user.id}.', quote=True)
+        return checked
+    return decorate
+
+
+verify_user = _access_guard(False)
+verify_admin = _access_guard(True)
