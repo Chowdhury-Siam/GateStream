@@ -2,12 +2,14 @@
 import asyncio
 import math
 import time
-from collections import Counter
 
 from cryptography.exceptions import InvalidTag
 from hydrogram import Client, raw
 from hydrogram.enums import ChatMemberStatus, ChatType
-from hydrogram.errors import FloodWait, PeerFlood, PeerIdInvalid, UserNotParticipant
+from hydrogram.errors import (
+    ChannelPrivate, ChatAdminRequired, ChatWriteForbidden, FloodWait, PeerFlood, PeerIdInvalid,
+    UserBannedInChannel, UserNotParticipant,
+)
 
 from bot.clients import TelegramBot, worker_clients
 from bot.config import Telegram
@@ -58,60 +60,40 @@ async def membership(client, channel_id, user_id, *, expected_id=None):
     return 'unverified'
 
 
-async def diagnose(channels):
-    """Return only confirmed results, retaining unknowns on errors or timeout."""
-    rows = []
-    for index, worker in enumerate(worker_clients):
-        profile = worker.me
+async def probe_workers(channel_id):
+    """Send one silent log message from each connected client and return failures."""
+    workers = tuple(worker_clients) or (TelegramBot,)
+    slots = asyncio.Semaphore(5)
+
+    async def probe(index, worker):
         label = 'Primary' if worker is TelegramBot else f'Worker {index}'
-        if profile and profile.username:
-            label += f' @{profile.username}'
-        results = dict.fromkeys(channels, 'unverified')
-        rows.append((label, worker, results))
-    note = ''
-    try:
-        async with asyncio.timeout(35):
-            for _, worker, results in rows:
-                if not worker.is_connected or not worker.me:
-                    continue
-                for channel_id in results:
-                    try:
-                        async with asyncio.timeout(4):
-                            identity = 'me' if worker is TelegramBot else worker.me.username or worker.me.id
-                            expected = None if worker is TelegramBot else worker.me.id
-                            results[channel_id] = await membership(TelegramBot, channel_id, identity, expected_id=expected)
-                    except (FloodWait, PeerFlood):
-                        raise
-                    except Exception:
-                        # No permission, unknown peer or transient failure does not prove absence.
-                        continue
-    except FloodWait as error:
-        note = f'Telegram paused the check. Retry after {error.value}s.'
-    except PeerFlood:
-        note = 'Telegram restricted the check. Review the account before retrying.'
-    except TimeoutError:
-        note = 'Check timed out. The remaining results are unverified.'
-    return rows, note
+        if worker.me and worker.me.username:
+            label += f' @{worker.me.username}'
+        if not worker.is_connected:
+            return f'• {label} · Offline'
+        async with slots:
+            try:
+                async with asyncio.timeout(10):
+                    peer = await worker.resolve_peer(channel_id)
+                    await worker.invoke(raw.functions.messages.SendMessage(
+                        peer=peer, message=f'GateStream worker check · {label}',
+                        random_id=worker.rnd_id(), silent=True,
+                    ), retries=1, sleep_threshold=0)
+                return None
+            except (ChatAdminRequired, ChatWriteForbidden):
+                reason = 'Posting permission denied'
+            except (ChannelPrivate, PeerIdInvalid, UserBannedInChannel):
+                reason = 'Channel inaccessible'
+            except FloodWait as error:
+                reason = f'Rate limited for {error.value}s'
+            except TimeoutError:
+                reason = 'Check timed out'
+            except Exception as error:
+                reason = f'Post failed ({type(error).__name__})'
+        return f'• {label} · {reason}'
 
-
-def diagnostic_text(channels, rows, note=''):
-    text = [f'GateStream Workers · {len(rows)} configured', f'Channels selected: {len(channels)}']
-    if channels:
-        text.append('Channel IDs: ' + ', '.join(str(cid) for cid in channels))
-    for label, worker, results in rows[:25]:
-        if not worker.is_connected or not worker.me:
-            text.append(f'• {label}: offline')
-            continue
-        counts = Counter(results.values())
-        details = ' · '.join(f'{counts[key]} {key}' for key in ('present', 'missing', 'blocked', 'unverified')
-                             if counts[key])
-        text.append(f'• {label}: {details or "connected"}')
-    if len(rows) > 25:
-        text.append(f'… {len(rows) - 25} more workers')
-    if note:
-        text.append(note)
-    text.append('Use /workers CHANNEL_ID for one channel.\nUse /workerrepair CHANNEL_ID to add confirmed missing workers.')
-    return '\n'.join(text)
+    results = await asyncio.gather(*(probe(index, worker) for index, worker in enumerate(workers)))
+    return len(workers), [failure for failure in results if failure is not None]
 
 
 def repair_client(credentials):
