@@ -6,14 +6,14 @@ from bot.clients import TelegramBot
 from bot.config import Telegram
 from bot.modules import personal_library as library
 from bot.modules.access import group_id
-from bot.modules.decorators import verify_user
+from bot.modules.decorators import verify_file_user, verify_user
 from bot.modules.index_zip import reply_zip
 
 logger = logging.getLogger('bot')
 
 
 @TelegramBot.on_message(filters.command('index') & (filters.private | filters.group) & filters.text)
-@verify_user
+@verify_file_user
 async def index_command(_, message):
     parts = message.text.split(maxsplit=1)
     await personal_index(message, parts[1] if len(parts) > 1 else '')
@@ -30,16 +30,15 @@ async def personal_index(message, requested_name='', *, user_id=None):
         return await message.reply('The bot needs a storage channel before it can collect uploads.', quote=True)
     user_id = user_id if user_id is not None else message.from_user.id
     chat_id = group_id(message)
+    topic_id = getattr(message, 'message_thread_id', None) if chat_id is not None else None
     finished_folder = None
     try:
         name = library.folder_name(requested_name) if requested_name else None
         async with library.user_lock(user_id):
-            folder = await library.active_folder(user_id, chat_id)
+            folder = await library.active_folder(user_id, chat_id, topic_id=topic_id)
             if folder is None:
-                await library.create_folder(user_id, name or library.folder_name(''), chat_id)
-                upload = 'Send your files here.'
-                if chat_id is not None:
-                    upload += ' If Telegram privacy mode limits what the bot can see, reply to this message with your files.'
+                await library.create_folder(user_id, name or library.folder_name(''), chat_id, topic_id=topic_id)
+                upload = 'Post your files in this topic.' if chat_id is not None else 'Send your files here.'
                 text = (f'Index started. {upload}\n'
                         f'Add up to {library.MAX_FOLDER_FILES} files. Send /index again to get the ZIP link.\n'
                         'Use /index My folder to finish with a custom name.')
@@ -49,7 +48,7 @@ async def personal_index(message, requested_name='', *, user_id=None):
                     await library.discard_empty_folder(folder)
                     text = 'Index closed. No files were added.'
                     if chat_id is not None:
-                        text += ' If you sent files here, start a new /index and send them as replies to the bot’s index message.'
+                        text += ' Check that the bot can receive ordinary messages in this topic, then open a new /index.'
                 else:
                     name = name or folder['name']
                     await library.finish_folder(folder, name)
