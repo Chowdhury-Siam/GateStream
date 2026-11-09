@@ -83,6 +83,10 @@ async def menu_callback(query, action):
         from bot.modules.personal_library import send_login_link
         await query.answer()
         return await send_login_link(message, user_id=user_id)
+    if action == 'workersetup' and message.chat.type == ChatType.PRIVATE and is_owner(user_id):
+        from bot.modules.personal_library import send_login_link
+        await query.answer()
+        return await send_login_link(message, user_id=user_id, worker_setup=True)
     if action == 'access' and is_owner(user_id):
         from bot.plugins.access import ACCESS_HELP
         await query.answer()
