@@ -52,9 +52,9 @@ In the Space's **Settings > Variables and secrets**, add these as **Secrets**:
 | `OWNER_ID` | Your positive numeric Telegram user ID |
 | `DATABASE_URL` | Your MongoDB connection URI from step 1 |
 
-Optional secrets: `MULTI_BOT_TOKENS` (space-separated worker tokens), `AUTH_USERS`
-(space-separated admin IDs), `ALLOWED_USER_IDS`, `TELEGRAM_CHANNEL_ID` (for new-user notices and direct
-uploads), and `OMNI_MONGO_URI` (a separate upstream catalog database). If using
+Optional secrets: `MULTI_BOT_TOKENS` (space-separated worker tokens),
+`TELEGRAM_CHANNEL_ID` (for new-user notices and uploads), and `OMNI_MONGO_URI`
+(a separate upstream catalog database). If using
 `OMNI_MONGO_URI`, it must also be reachable on an allowed port. Without it, the
 catalog uses the `OmniArchiverDB` database on your own MongoDB server.
 
@@ -93,7 +93,9 @@ Free CPU hardware can sleep when unused. Telegram messages do not constitute
 visits to the Space's web app, so do not assume an always-running Telegram bot.
 Use appropriate always-on hardware if continuous availability is required.
 Anyone holding a generated file URL can access it when the Space is public;
-`ALLOWED_USER_IDS` restricts Telegram commands, not HTTP file access.
+Only the owner can use the Telegram bot by default. Grant access with
+`/auth` as described in the [README](README.md#telegram-access-and-commands).
+Anyone with a valid HTTP download link can use that link.
 
 ## Local checks
 
@@ -118,12 +120,10 @@ Cloudflare deployment automation is supplied separately in `GateStream-GitHub.zi
 The Space must be permitted to run: source updates do not clear a paused
 `Flagged as abusive` status; request a review from Hugging Face in that case.
 
-## Channel indexing and media classification
+## Media classification
 
-Use `/index LAST_POST_LINK` to scan a channel automatically, with progress and
-resume. AniList needs no key. Optional Space Secrets `MAL_CLIENT_ID` and
-`OMDB_API_KEY` enable additional metadata providers; restart after setting them.
-See [CHANNEL_INDEX.md](CHANNEL_INDEX.md).
+When the owner links a channel post with `/link`, GateStream can classify its
+title with AniList and the optional `MAL_CLIENT_ID` and `OMDB_API_KEY` settings.
 
 ## Immediate and parallel ZIP downloads (2.0.6)
 
@@ -149,8 +149,8 @@ New ZIP downloads start immediately. Four download-manager connections can be
 a starting point. Host, proxy, and network limits still affect speed.
 
 ZIP links last 24 hours. Keep the default `ZIP_CACHE_MAX_MB=8192` (8 GiB shared
-disk budget) or set a size that fits your Space's available disk. Large selections
-must fit both that budget and free disk. `ZIP_CACHE_DIR` can point to an existing
+disk budget) or set a size that fits your Space's available disk. ZIPs that
+exceed the available cache stream directly with one connection and no resume. `ZIP_CACHE_DIR` can point to an existing
 persistent volume if your hosting provides one. The default directory is
 `cache/archives`; do not upload its contents. Up to two live ZIP builds can run at a time.
 Expired ZIPs and interrupted partial files are cleaned when new selections are
