@@ -3,6 +3,7 @@ from logging import getLogger
 from itertools import cycle
 from bot.config import Telegram
 from bot.database import db
+from bot.modules.forum_updates import install_forum_parser
 
 logger = getLogger('bot')
 
@@ -21,6 +22,7 @@ TelegramBot = Client(
     max_concurrent_transmissions=10,
     ipv6=False
 )
+install_forum_parser(TelegramBot)
 
 # Multi-Client Worker Pool (Used for fast parallel chunk downloading and streaming)
 worker_clients: list[Client] = []
