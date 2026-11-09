@@ -12,33 +12,32 @@ from bot.modules.static import get_human_size
 from bot.modules.access import group_id, is_owner
 from bot.modules import personal_library as library
 
-async def is_reply_to_bot(_, client, message):
+
+def is_reply_to_bot(client, message):
     replied = message.reply_to_message
     author = getattr(replied, 'from_user', None)
     return bool(author and client.me and author.id == client.me.id)
 
 
-group_upload = filters.group & filters.reply & filters.create(is_reply_to_bot)
-
-
-@TelegramBot.on_message(
-    (filters.private | group_upload)
-    & (
-        filters.document
-        | filters.video
-        | filters.video_note
-        | filters.audio
-        | filters.voice
-        | filters.photo
-    )
+UPLOAD_MEDIA = (filters.private | filters.group) & (
+    filters.document | filters.video | filters.video_note | filters.audio | filters.voice | filters.photo
 )
+
+
+@TelegramBot.on_message(UPLOAD_MEDIA)
 @verify_user
-async def handle_user_file(_, msg: Message):
+async def handle_user_file(client, msg: Message):
+    chat_id = group_id(msg)
+    group_post = chat_id is not None and not is_reply_to_bot(client, msg)
     document = getattr(msg, 'document', None)
     private_name = (getattr(document, 'file_name', '') or '').lower()
     if private_name.endswith('.pickle') or (private_name.endswith('.json') and private_name.startswith(('token', 'credentials'))):
-        return await msg.reply('Private credential files must not be uploaded as media.', quote=False)
+        if not group_post:
+            await msg.reply('Private credential files must not be uploaded as media.', quote=False)
+        return
     if not Telegram.CHANNEL_ID:
+        if group_post:
+            return
         # If user forwards a file from a channel, inform them to use /link
         if is_owner(msg.from_user.id) and msg.forward_from_chat and msg.forward_from_message_id:
             return await msg.reply(
@@ -51,10 +50,13 @@ async def handle_user_file(_, msg: Message):
         )
 
     status_msg = None
+    folder_id = None
     try:
         user_id = msg.from_user.id
         async with library.user_lock(user_id):
-            folder = await library.active_folder(user_id, group_id(msg))
+            folder = await library.active_folder(user_id, chat_id)
+            if group_post and folder is None:
+                return
             folder_id = folder['_id'] if folder else None
             if folder_id and await library.folder_count(user_id, folder_id) >= library.MAX_FOLDER_FILES:
                 return await msg.reply('This index is full. Send /index to finish it before uploading more files.', quote=True)
@@ -96,5 +98,5 @@ async def handle_user_file(_, msg: Message):
     except Exception:
         if status_msg is not None:
             await status_msg.edit_text('❌ Could not save this file. Please send it again.')
-        else:
+        elif folder_id or not group_post:
             await msg.reply('❌ Could not add this file to your index. Please send it again.', quote=True)
