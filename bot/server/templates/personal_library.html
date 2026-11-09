@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="robots" content="noindex,nofollow">
-  <title>Your library · GateStream</title>
+  <title>{{ 'Worker repair setup' if worker_step or worker_sign_in else 'Your library' }} · GateStream</title>
   <style>
     * { box-sizing:border-box; }
     [hidden] { display:none !important; }
@@ -32,6 +32,9 @@
     .pager { justify-content:space-between; margin:14px 0; }
     .error { color:#ffc7b6; }
     .single-panel { max-width:530px; margin:32px auto; }
+    .setup-fields { display:grid; align-items:stretch; }
+    .setup-fields label { display:grid; gap:4px; }
+    .setup-fields button { justify-self:start; }
     @media (max-width:480px) { header { margin-bottom:18px; } .row { align-items:flex-start; } }
   </style>
 </head>
@@ -43,7 +46,33 @@
     </div>
   </header>
 
-  {% if shared %}
+  {% if worker_step %}
+  <section class="single-panel">
+    <h1>Worker repair setup</h1>
+    {% if worker_message %}<p class="error" role="alert">{{ worker_message }}</p>{% endif %}
+    {% if worker_step == 'done' %}
+    <p>Worker repair is connected. Return to the bot and run <code>/workerrepair CHANNEL_ID</code>.</p>
+    {% else %}
+    <form class="panel setup-fields" method="post" action="{{ url_for('.worker_setup') }}" autocomplete="off">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      {% if worker_step == 'start' %}
+      <p>Sign in with the Telegram account that matches the bot owner.</p>
+      <label>Telegram API ID <input name="api_id" inputmode="numeric" maxlength="10" required></label>
+      <label>Telegram API hash <input name="api_hash" type="password" maxlength="32" required></label>
+      <label>Phone number with country code <input name="phone" type="tel" maxlength="16" required></label>
+      <button class="primary" name="action" value="start">Send login code</button>
+      {% elif worker_step == 'code' %}
+      <label>Telegram login code <input name="code" inputmode="numeric" maxlength="12" autocomplete="one-time-code" required></label>
+      <button class="primary" name="action" value="code">Verify code</button>
+      {% else %}
+      <label>Telegram two-step password <input name="password" type="password" maxlength="512" required></label>
+      <button class="primary" name="action" value="password">Connect worker repair</button>
+      {% endif %}
+      {% if worker_step != 'start' %}<button name="action" value="cancel" formnovalidate>Cancel setup</button>{% endif %}
+    </form>
+    {% endif %}
+  </section>
+  {% elif shared %}
   <section class="single-panel">
     <h1>{{ shared.name }}</h1>
     <p>{{ total }} file{{ '' if total == 1 else 's' }} in this shared ZIP.</p>
@@ -57,25 +86,28 @@
   </section>
   {% elif not signed_in %}
   <section class="single-panel">
-    <h1>Your library</h1>
+    <h1>{{ 'Worker repair setup' if worker_sign_in else 'Your library' }}</h1>
     {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
     {% if confirm_sign_in %}
     <p>Confirm sign-in with the one-time link you received from the bot.</p>
-    <form id="sign-in" action="{{ url_for('.sign_in') }}" method="post" hidden>
+    <form id="sign-in" action="{{ url_for('.sign_in', setup='workers') if worker_sign_in else url_for('.sign_in') }}" method="post" hidden>
       <input type="hidden" name="csrf" value="{{ csrf }}">
       <input type="hidden" name="token">
-      <button class="primary">Sign in to my library</button>
+      <button class="primary">{{ 'Continue to worker setup' if worker_sign_in else 'Sign in to my library' }}</button>
     </form>
-    <p id="sign-in-help">Open the sign-in link from <code>/catalog</code> with JavaScript enabled.</p>
+    <p id="sign-in-help">Open the sign-in link from <code>{{ '/workersetup' if worker_sign_in else '/catalog' }}</code> with JavaScript enabled.</p>
     <script>
       const token = window.location.hash.slice(1);
       if (/^[A-Za-z0-9_-]{43}$/.test(token)) {
         const form = document.getElementById('sign-in');
         form.elements.token.value = token;
+        history.replaceState(null, '', window.location.pathname + window.location.search);
         form.hidden = false;
         document.getElementById('sign-in-help').hidden = true;
       }
     </script>
+    {% elif worker_sign_in %}
+    <p>Send <code>/workersetup</code> in the owner’s private bot chat to get a fresh link.</p>
     {% else %}
     <p>Sign in through Telegram to see the files and index folders you sent to the bot.</p>
     {% if bot_username %}<a class="btn primary" href="https://t.me/{{ bot_username }}?start=library">Open Telegram bot</a>{% endif %}
