@@ -41,7 +41,8 @@ async def send_menu(message, user_id):
         'Use Index to collect files into one ZIP. Send /index My folder to finish with a custom name.'
     )
     if in_group:
-        text += '\nGroup access works in this chat. Personal library sign-in requires a user grant.'
+        text += ('\nAn open Index also collects files you send directly in this group if Telegram delivers them to the bot.'
+                 '\nPersonal library sign-in requires a user grant.')
     else:
         text += '\nUse Library to view your saved files and ZIP folders.'
     buttons = [[InlineKeyboardButton('Index', callback_data='menu:index')]]
