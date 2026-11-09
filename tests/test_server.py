@@ -130,7 +130,7 @@ class TelegramReplyTests(unittest.IsolatedAsyncioTestCase):
         parsed = await clients.TelegramBot.parser.parse(message.reply.call_args.args[0])
         self.assertIn('/link https://t.me/c/1234567890/42', parsed['message'])
 
-    async def test_direct_upload_captions_include_duration(self):
+    async def test_direct_upload_captions_show_duration_only_when_known(self):
         for video in (True, False):
             with self.subTest(video=video):
                 status = SimpleNamespace(edit_text=AsyncMock())
@@ -148,7 +148,11 @@ class TelegramReplyTests(unittest.IsolatedAsyncioTestCase):
                         with patch.object(self.files, 'save_file', AsyncMock(return_value={'code': 'test-code'})):
                             await self.files.handle_user_file.__wrapped__(None, message)
                 caption = status.edit_text.call_args.kwargs['text']
-                self.assertIn(properties[-1], caption)
+                if video:
+                    self.assertIn('Duration 01:05', caption)
+                else:
+                    self.assertNotIn('Duration', caption)
+                    self.assertNotIn('N/A', caption)
                 self.assertIn('https://user-app.hf.space/dl/test-code', caption)
 
     async def test_private_credentials_are_not_indexed_as_media(self):
