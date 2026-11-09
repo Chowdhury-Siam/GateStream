@@ -1,6 +1,8 @@
 from hydrogram.types import CallbackQuery
-from bot.clients import TelegramBot
 from bot.config import Telegram
+from bot.clients import TelegramBot
+from hydrogram.enums import ChatType, ParseMode
+from bot.modules.access import group_id, is_owner
 from bot.database.files import get_file, delete_file
 from bot.modules.decorators import verify_user
 from bot.modules.telegram import get_message
@@ -10,6 +12,8 @@ from bot.modules.index_zip import select_zip
 @verify_user
 async def manage_callback(bot, q: CallbackQuery):
     query = q.data or ''
+    if query.startswith('menu:'):
+        return await menu_callback(q, query.removeprefix('menu:'))
     if query.startswith('zip:'):
         return await select_zip(q)
 
@@ -21,7 +25,7 @@ async def manage_callback(bot, q: CallbackQuery):
             return await q.answer("File link does not exist or was already revoked.", show_alert=True)
 
         user_id = q.from_user.id
-        owner_or_admin = (user_id in Telegram.ADMIN_IDS) or (user_id == doc.get('user_id'))
+        owner_or_admin = is_owner(user_id) or (user_id == doc.get('user_id'))
 
         if not owner_or_admin:
             return await q.answer("❌ You are not authorized to revoke this link.", show_alert=True)
@@ -58,3 +62,29 @@ async def manage_callback(bot, q: CallbackQuery):
         await q.answer("✅ Link permanently revoked!", show_alert=True)
     else:
         await q.answer("Invalid query.", show_alert=True)
+
+
+async def menu_callback(query, action):
+    message = query.message
+    user_id = query.from_user.id
+    if not message:
+        return await query.answer('Open the menu with /start.', show_alert=True)
+    if action == 'id':
+        chat_id = group_id(message)
+        text = f'Your Telegram ID: {user_id}'
+        if chat_id:
+            text += f'\nGroup ID: {chat_id}'
+        return await query.answer(text, show_alert=True)
+    if action == 'index':
+        from bot.plugins.personal_index import personal_index
+        await query.answer()
+        return await personal_index(message, user_id=user_id)
+    if action == 'library' and message.chat.type == ChatType.PRIVATE:
+        from bot.modules.personal_library import send_login_link
+        await query.answer()
+        return await send_login_link(message, user_id=user_id)
+    if action == 'access' and is_owner(user_id):
+        from bot.plugins.access import ACCESS_HELP
+        await query.answer()
+        return await message.reply(ACCESS_HELP, quote=True, parse_mode=ParseMode.DISABLED)
+    await query.answer('This action is unavailable here.', show_alert=True)
