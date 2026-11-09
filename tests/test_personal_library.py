@@ -15,12 +15,12 @@ with patch.dict(os.environ, {
     'SPACE_ID': 'user/app', 'SPACE_HOST': 'user-app.hf.space',
 }, clear=True):
     from bot import clients
-    from bot.modules import index_zip, personal_library as library
+    from bot.modules import decorators, index_zip, personal_library as library
     from bot.modules.archive_cache import ArchiveCache
     from bot.server import catalog, instance, main
     from quart import Response
     with patch.object(clients.TelegramBot, 'add_handler'):
-        from bot.plugins import callback, channel_index, files
+        from bot.plugins import callback, personal_index, files
 
 
 async def csrf(response):
@@ -65,8 +65,13 @@ class PersonalLibraryTests(unittest.IsolatedAsyncioTestCase):
                 return True
             return False
 
-        with patch.object(library.db, 'db', {'library_sessions': storage}), \
-             patch.object(library.Telegram, 'ALLOWED_USER_IDS', []), \
+        grants = {111, 222}
+
+        async def find_grant(query, projection):
+            return next(({'_id': ident} for ident in query['_id']['$in'] if ident in grants), None)
+
+        with patch.object(library.db, 'db', {'library_sessions': storage,
+                                             'bot_access': SimpleNamespace(find_one=find_grant)}), \
              patch.object(library, 'page_items', side_effect=listing) as get_items, \
              patch.object(library, 'folder_by_id', side_effect=folder_lookup), \
              patch.object(library, 'rename_folder', side_effect=rename), \
@@ -104,17 +109,20 @@ class PersonalLibraryTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual((await first.post('/index/sign-out', form={'csrf': await csrf(own_folder)},
                                               scheme='https')).status_code, 303)
             self.assertEqual((await first.get(folder_path, scheme='https')).status_code, 302)
+            grants.remove(222)
+            revoked = await other.get('/index?tab=single', scheme='https')
+            self.assertNotIn(names[222], await revoked.get_data(as_text=True))
 
     async def test_bot_collects_fifty_uploads_and_returns_named_folder_link(self):
         folder_id = 'a' * 43
         draft = None
         uploads = []
 
-        async def start(user_id, name):
+        async def start(user_id, name, chat_id):
             nonlocal draft
             draft = dict(_id=folder_id, user_id=user_id, name=name)
 
-        async def active(user_id):
+        async def active(user_id, chat_id):
             return draft if draft and draft['user_id'] == user_id else None
 
         async def finish(folder, name):
@@ -135,24 +143,27 @@ class PersonalLibraryTests(unittest.IsolatedAsyncioTestCase):
                 reply=AsyncMock(return_value=SimpleNamespace(edit_text=AsyncMock())), video=None, document=None,
                 copy=AsyncMock(return_value=SimpleNamespace(id=42)))
 
-        with patch.object(library.Telegram, 'CHANNEL_ID', -1001234), \
+        with patch.object(decorators, 'has_access', AsyncMock(return_value=True)), \
+             patch.object(library.Telegram, 'CHANNEL_ID', -1001234), \
              patch.multiple(library, create_folder=start, active_folder=active, finish_folder=finish, folder_count=count), \
              patch.object(files, 'get_file_properties', return_value=('File.apk', 10, 'application/octet-stream', 0, 'N/A')), \
-             patch.object(files, 'save_file', side_effect=save):
-            await channel_index.index_command(None, message(111, '/index'))
+             patch.object(files, 'save_file', side_effect=save), \
+             patch.object(library, 'folder_files', AsyncMock(return_value=[{'code': 'upload-1'}])) as members, \
+             patch.object(catalog, 'create_archive', AsyncMock(return_value='b' * 43)) as create:
+            await personal_index.index_command(None, message(111, '/index'))
             await asyncio.gather(*(files.handle_user_file(None, message(111)) for _ in range(50)),
                                  files.handle_user_file(None, message(222)))
             close = message(111, '/index My fifty files')
-            await channel_index.index_command(None, close)
+            await personal_index.index_command(None, close)
             await files.handle_user_file(None, message(111))
         self.assertEqual(sum(item['personal_index_id'] == folder_id for item in uploads), 50)
         self.assertEqual([item['user_id'] for item in uploads if not item['personal_index_id']], [222, 111])
         self.assertTrue(all(item['personal'] for item in uploads))
-        self.assertIn('Saved 50 files', close.reply.call_args.args[0])
-        buttons = close.reply.call_args.kwargs['reply_markup'].inline_keyboard[0]
-        self.assertEqual([(b.text, b.callback_data) for b in buttons], [
-            ('Start immediately', f'zip:stream:{folder_id}'),
-        ])
+        members.assert_awaited_once_with(111, folder_id)
+        create.assert_awaited_once_with([{'code': 'upload-1'}], 'My fifty files.zip', folder_id=folder_id, user_id=111)
+        self.assertEqual(close.reply.call_args.args[0],
+            f'<code>{library.Server.BASE_URL}/index/archive/{"b" * 43}/My%20fifty%20files.zip</code>')
+        self.assertNotIn('reply_markup', close.reply.call_args.kwargs)
 
     async def test_telegram_zip_starts_before_the_archive_is_complete(self):
         from urllib.parse import urlsplit
@@ -187,6 +198,7 @@ class PersonalLibraryTests(unittest.IsolatedAsyncioTestCase):
             try:
                 with patch.object(catalog, 'archive_cache', cache), \
                      patch.object(library.db, 'db', {'download_tickets': storage}), \
+                     patch.object(decorators, 'has_access', AsyncMock(return_value=True)), \
                      patch.object(library, 'folder_by_id', AsyncMock(return_value=folder)) as lookup, \
                      patch.object(library, 'folder_files', AsyncMock(return_value=members)), \
                      patch.object(main, 'transmit_file', side_effect=source):
@@ -200,9 +212,9 @@ class PersonalLibraryTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(len(tickets), 1)
                     token = next(iter(tickets))
                     text, = message.edit_text.call_args.args
-                    button = message.edit_text.call_args.kwargs['reply_markup'].inline_keyboard[0][0]
-                    self.assertIn(button.url, text)
-                    path = urlsplit(button.url).path
+                    self.assertTrue(text.startswith('<code>') and text.endswith('</code>'))
+                    self.assertNotIn('reply_markup', message.edit_text.call_args.kwargs)
+                    path = urlsplit(text.removeprefix('<code>').removesuffix('</code>')).path
                     self.assertEqual(path, f'/index/archive/{token}/My%20ZIP.zip')
                     self.assertFalse(cache.jobs[token]['task'].done())
                     part = await asyncio.wait_for(instance.test_client().get(path, headers={'Range': 'bytes=0-1'}), 1)
@@ -225,11 +237,12 @@ class PersonalLibraryTests(unittest.IsolatedAsyncioTestCase):
         folder_id = 'a' * 43
         query = SimpleNamespace(data=f'zip:prepare:{folder_id}', from_user=SimpleNamespace(id=222),
             message=SimpleNamespace(chat=SimpleNamespace(type=ChatType.PRIVATE)), answer=AsyncMock())
-        with patch.object(library, 'folder_by_id', AsyncMock(return_value=None)) as lookup, \
+        with patch.object(decorators, 'has_access', AsyncMock(return_value=True)), \
+             patch.object(library, 'folder_by_id', AsyncMock(return_value=None)) as lookup, \
              patch.object(catalog, 'create_archive', AsyncMock()) as create:
             await callback.manage_callback(None, query)
             lookup.assert_not_awaited()
-            self.assertIn('Start immediately', query.answer.call_args.args[0])
+            self.assertIn('/catalog', query.answer.call_args.args[0])
             query.data = f'zip:stream:{folder_id}'
             await callback.manage_callback(None, query)
         lookup.assert_awaited_once_with(folder_id, 222)
