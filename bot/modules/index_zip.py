@@ -56,17 +56,8 @@ async def _zip_reply(folder):
 
         url = f'{Server.BASE_URL}/index/archive/{token}/{quote(name, safe="")}'
         count = len(files)
-        filenames = []
-        for item in files[:5]:
-            filename = ' '.join(item['file_name'].split())
-            if len(filename) > 100:
-                filename = filename[:99] + '…'
-            filenames.append(f'• {escape(filename)}')
-        if count > len(filenames):
-            filenames.append(f'… and {count - len(filenames)} more')
-        contents = '\n'.join(filenames)
         text = (f'<b>ZIP download</b>\n<b>{escape(name)}</b> · {count} {"file" if count == 1 else "files"}\n\n'
-                f'{contents}\n\nCopy link\n<code>{escape(url)}</code>')
+                f'Copy link\n<code>{escape(url)}</code>')
         button = InlineKeyboardMarkup([[InlineKeyboardButton('Download', url=url)]])
         return text, button
     except ValueError as error:
