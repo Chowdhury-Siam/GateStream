@@ -23,15 +23,24 @@ def forum_topic(message):
     return None
 
 
-async def is_file_topic(message):
+async def file_topic_status(message):
     topic = forum_topic(message)
     if topic is None:
-        return False
+        return 'no_topic'
     try:
-        return await db.db['bot_settings'].find_one({'_id': 'file_to_link', **topic}, {'_id': 1}) is not None
+        saved = await db.db['bot_settings'].find_one({'_id': 'file_to_link'}, {'chat_id': 1, 'topic_id': 1})
     except Exception as error:
         logger.warning('File To Link topic lookup failed (%s).', type(error).__name__)
-        return False
+        return 'unavailable'
+    if not saved:
+        return 'unbound'
+    if saved.get('chat_id') == topic['chat_id'] and saved.get('topic_id') == topic['topic_id']:
+        return 'active'
+    return 'different'
+
+
+async def is_file_topic(message):
+    return await file_topic_status(message) == 'active'
 
 
 async def set_file_topic(topic):
