@@ -6,7 +6,6 @@ import re
 import shutil
 import time
 from contextvars import Context
-from contextlib import nullcontext
 from pathlib import Path
 from collections import deque
 
@@ -30,6 +29,7 @@ class ArchiveCache:
         self.jobs = {}
         self.lock = asyncio.Lock()
         self.builder = asyncio.Semaphore(1)
+        self.live_builders = asyncio.Semaphore(2)
 
     def path(self, token):
         if not re.fullmatch(r'[A-Za-z0-9_-]{43}', token):
@@ -55,8 +55,6 @@ class ArchiveCache:
         async with self.lock:
             if token in self.jobs:
                 return
-            if progressive and sum(job['progressive'] and not job['task'].done() for job in self.jobs.values()) >= 2:
-                raise ArchiveCapacityError('Live ZIP capacity is full. Try again shortly.')
             used = await asyncio.to_thread(self._prune)
             reserved = sum(job['total'] for job in self.jobs.values() if not job['task'].done())
             if total + used + reserved > self.max_bytes or len(self.jobs) >= 128:
@@ -74,7 +72,7 @@ class ArchiveCache:
         final = self.path(token)
         partial = final.with_suffix('.part')
         try:
-            async with (nullcontext() if job['progressive'] else self.builder):
+            async with (self.live_builders if job['progressive'] else self.builder):
                 if job['expires'] <= time.time():
                     raise RuntimeError('Download link expired during preparation')
                 job['state'] = 'preparing'
@@ -97,8 +95,10 @@ class ArchiveCache:
                     raise RuntimeError('ZIP length changed during preparation')
                 stamp = job['expires'] - ARCHIVE_AGE
                 os.utime(partial, (stamp, stamp))
-                partial.replace(final)
-                job['state'] = 'ready'
+                # Move from reserved space to on-disk space under the same lock as admission.
+                async with self.lock:
+                    partial.replace(final)
+                    job['state'] = 'ready'
         except asyncio.CancelledError:
             job['state'] = 'failed'
             raise
