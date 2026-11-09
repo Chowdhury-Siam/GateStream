@@ -7,7 +7,6 @@ from hydrogram.types import Message
 from bot.clients import TelegramBot, worker_clients, get_heartbeat_status
 from bot.config import Telegram
 from bot.database import db
-from bot.database.files import get_stats
 from bot.modules.static import get_human_size
 from bot.modules.decorators import verify_user, verify_admin
 from bot.modules.new_users import notify_new_user
@@ -18,6 +17,7 @@ from bot.modules.activity import activity
 from bot.modules import worker_repair
 
 _repair_task = None
+_worker_check_lock = asyncio.Lock()
 
 def get_readable_time(seconds: int) -> str:
     result = []
@@ -59,10 +59,9 @@ async def stats_command(_, msg: Message):
         async with asyncio.timeout(12):
             if db.db is None:
                 raise RuntimeError
-            stats = await get_stats()
+            uploads = await db.db['direct_files'].count_documents({})
             folders = await db.db['library_folders'].count_documents({'state': 'ready'})
-        library = (f"Uploads {stats['direct_files']:,} · ZIP folders {folders:,}\n"
-                   f"Movies {stats['local_movies']:,} · Anime files {stats['anime_episodes']:,} · Series files {stats['webseries_episodes']:,}")
+            library = f'Uploads {uploads:,} · ZIP folders {folders:,}'
     except Exception:
         library = 'MongoDB library counts unavailable.'
     try:
@@ -80,7 +79,7 @@ async def stats_command(_, msg: Message):
         f"Transfers\nActive links {snapshot['active_media_links']} · Connections {media['active']} · {get_human_size(int(media['speed_bps']))}/s\n"
         f"Sent {get_human_size(media['bytes'])} · Files completed {media['single_downloads']:,} · ZIPs completed {media['zip_downloads']:,}\n"
         f"Totals storage: {snapshot['persistence']['state']}\n\n"
-        '/workers to check membership · /workersetup to connect the repair account · /workerrepair to add missing workers'
+        '/workers to test log posting · /workersetup to connect the repair account · /workerrepair to add missing workers'
     )
     await msg.reply(text, quote=True, parse_mode=enums.ParseMode.DISABLED)
 
@@ -93,36 +92,51 @@ async def log_command(_, msg: Message):
     except Exception as e:
         await msg.reply(f"❌ Failed to send log file: `{e}`", quote=True)
 
-async def _worker_channels(msg, *, repair=False):
+async def _worker_channel(msg):
     args = msg.command[1:]
+    if not args:
+        if Telegram.CHANNEL_ID < 0:
+            return Telegram.CHANNEL_ID, ''
+        return None, 'Set TELEGRAM_CHANNEL_ID or provide a GateStream storage channel ID.'
     try:
-        if len(args) > 1:
+        if len(args) != 1:
             raise ValueError
-        channel_id = int(args[0]) if args else Telegram.CHANNEL_ID if repair else None
+        channel_id = int(args[0])
     except ValueError:
         return None, 'Use a numeric Telegram channel ID, such as -1001234567890.'
+    if channel_id == Telegram.CHANNEL_ID and channel_id < 0:
+        return channel_id, ''
     try:
         async with asyncio.timeout(10):
             channels = await worker_repair.storage_channels()
     except Exception:
         return None, 'Could not read the storage channels from MongoDB.'
-    if channel_id is None:
-        return channels[:10], '' if len(channels) <= 10 else 'Showing the first 10 channels.'
     if channel_id not in channels:
-        return None, 'Choose a channel already used by GateStream. Use /workers to see channel IDs.'
-    return [channel_id], ''
+        return None, 'Choose a channel already used by GateStream or omit the ID to use TELEGRAM_CHANNEL_ID.'
+    return channel_id, ''
 
 
 @TelegramBot.on_message(filters.command(['workers', 'bots']) & filters.private)
 @verify_admin
 async def workers_command(_, msg: Message):
-    channels, note = await _worker_channels(msg)
-    if channels is None:
-        return await msg.reply(note, quote=True)
-    status = await msg.reply('Checking worker membership…', quote=True)
-    rows, report = await worker_repair.diagnose(channels)
-    await status.edit_text(worker_repair.diagnostic_text(channels, rows, '\n'.join(filter(None, (note, report)))),
-                           parse_mode=enums.ParseMode.DISABLED)
+    if _worker_check_lock.locked():
+        return await msg.reply('A worker log check is already running.', quote=True)
+    async with _worker_check_lock:
+        channel_id, note = await _worker_channel(msg)
+        if channel_id is None:
+            return await msg.reply(note, quote=True)
+        status = await msg.reply('Checking which bots can post to the log…', quote=True)
+        total, failures = await worker_repair.probe_workers(channel_id)
+        if not failures:
+            return await status.edit_text(f'All {total} bots posted to the log.', parse_mode=enums.ParseMode.DISABLED)
+
+        summary = f'{len(failures)} of {total} bots could not post to channel {channel_id}.'
+        for start in range(0, len(failures), 30):
+            text = '\n'.join([summary, *failures[start:start + 30]])
+            if start == 0:
+                await status.edit_text(text, parse_mode=enums.ParseMode.DISABLED)
+            else:
+                await msg.reply(text, quote=True, parse_mode=enums.ParseMode.DISABLED)
 
 
 @TelegramBot.on_message(filters.command('workersetup') & filters.private)
@@ -135,14 +149,14 @@ async def workersetup_command(_, msg: Message):
 @verify_admin
 async def workerrepair_command(_, msg: Message):
     global _repair_task
-    channels, note = await _worker_channels(msg, repair=True)
-    if not channels:
+    channel_id, note = await _worker_channel(msg)
+    if channel_id is None:
         return await msg.reply(note, quote=True)
     if _repair_task and not _repair_task.done():
         return await msg.reply('Worker repair is already running.', quote=True)
 
     async def run():
-        status = await msg.reply(f'Checking channel {channels[0]} before worker repair…', quote=True)
+        status = await msg.reply(f'Checking channel {channel_id} before worker repair…', quote=True)
 
         async def report(text):
             try:
@@ -151,7 +165,7 @@ async def workerrepair_command(_, msg: Message):
                 pass
 
         try:
-            result = await worker_repair.repair_channel(channels[0], report)
+            result = await worker_repair.repair_channel(channel_id, report)
         except Exception as error:
             result = f'Worker repair could not proceed ({type(error).__name__}).'
         await report(result)
