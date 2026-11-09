@@ -112,6 +112,6 @@ as your bot host’s `BASE_URL`.
 ### Personal library forms and ZIP downloads
 
 The Worker forwards GET and HEAD, plus POST forms for personal library
-sign-in, sign-out, folder renaming, and shared ZIP preparation. It passes
+sign-in, sign-out, folder renaming, shared ZIP preparation, and owner worker setup. It passes
 cookies, range headers, and streamed ZIP responses through to the origin.
 Deploy the Worker with the updated origin to apply the current route list.
