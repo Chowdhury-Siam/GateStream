@@ -192,6 +192,7 @@ async def get_stats() -> dict:
     if db.movies is not None:
         stats['movie_titles'] = await db.movies.count_documents({})
         stats['movies'] = stats['movie_titles']
+    stats['local_movies'] = stats['movies']
     if db.direct_files is not None:
         stats['direct_files'] = await db.direct_files.count_documents({})
 
