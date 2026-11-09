@@ -37,7 +37,9 @@ async def personal_index(message, requested_name='', *, user_id=None):
             folder = await library.active_folder(user_id, chat_id)
             if folder is None:
                 await library.create_folder(user_id, name or library.folder_name(''), chat_id)
-                upload = 'Reply to this message with your files.' if chat_id else 'Send your files here.'
+                upload = 'Send your files here.'
+                if chat_id is not None:
+                    upload += ' If Telegram privacy mode limits what the bot can see, reply to this message with your files.'
                 text = (f'Index started. {upload}\n'
                         f'Add up to {library.MAX_FOLDER_FILES} files. Send /index again to get the ZIP link.\n'
                         'Use /index My folder to finish with a custom name.')
@@ -46,6 +48,8 @@ async def personal_index(message, requested_name='', *, user_id=None):
                 if not count:
                     await library.discard_empty_folder(folder)
                     text = 'Index closed. No files were added.'
+                    if chat_id is not None:
+                        text += ' If you sent files here, start a new /index and send them as replies to the bot’s index message.'
                 else:
                     name = name or folder['name']
                     await library.finish_folder(folder, name)
