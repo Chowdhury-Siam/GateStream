@@ -2,7 +2,7 @@ from hydrogram import enums, filters
 
 from bot.clients import TelegramBot
 from bot.config import Telegram
-from bot.modules.access import group_id, set_access
+from bot.modules.access import forum_topic, group_id, set_access, set_file_topic
 from bot.modules.decorators import verify_admin
 
 ACCESS_HELP = (
@@ -11,7 +11,8 @@ ACCESS_HELP = (
     '/auth GROUP_ID — allow members in that group\n'
     'In a group, send /auth with no ID to allow that group. '
     'Reply to a member with /auth to allow that member directly.\n\n'
-    'Use /unauth the same way to remove access.'
+    'Use /unauth the same way to remove access.\n'
+    'Send /filetolink inside the File To Link topic to enable file tools there.'
 )
 
 
@@ -43,3 +44,17 @@ async def access_command(_, message):
     kind = 'Group' if target < 0 else 'User'
     action = 'authorized' if granted else 'authorization removed'
     await message.reply(f'{kind} {target}: {action}.', quote=True, parse_mode=enums.ParseMode.DISABLED)
+
+
+@TelegramBot.on_message(filters.command('filetolink') & filters.group & filters.text)
+@verify_admin
+async def file_to_link_command(_, message):
+    topic = forum_topic(message)
+    if topic is None:
+        return await message.reply('Run /filetolink inside the File To Link forum topic.', quote=True)
+    try:
+        await set_file_topic(topic)
+    except Exception:
+        return await message.reply('Could not save the File To Link topic. Try again shortly.', quote=True)
+    await message.reply('File To Link is active in this topic. Authorized members can post files for automatic links or use /index to make a ZIP.',
+                        quote=True, parse_mode=enums.ParseMode.DISABLED)
