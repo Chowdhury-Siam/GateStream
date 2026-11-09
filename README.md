@@ -127,9 +127,33 @@ start and finish their own indexes, and upload by replying to a bot message
 with a file. Private chat and browser library sign-in require a direct
 user grant. The owner can always use the bot.
 
-Owner tools include `/stats`, `/workers`, `/log`, `/sync_duration`,
+Owner tools include `/stats`, `/workers`, `/workersetup`, `/workerrepair`, `/log`, `/sync_duration`,
 `/set_title`, `/revoke`, `/clean`, `/backup`, `/restore`, `/purge`,
 and `/restart`.
+
+## Worker membership and repair
+
+`/stats` shows connected bots, host resources, MongoDB library totals and live
+transfers. `/workers` lists channel IDs and reports confirmed present, missing,
+blocked, and unverified workers. Use `/workers CHANNEL_ID` for a specific channel.
+
+In the owner's private bot chat, send `/workersetup` or select **Set up worker
+repair** from the `/start` menu. Open the one-time HTTPS link and enter your
+Telegram API ID, API hash, phone number, login code, and two-step password if
+Telegram requests it. The Telegram account must match `OWNER_ID`.
+
+GateStream encrypts the session and its API credentials using a key derived
+from the bot token and stores them in MongoDB for immediate use and restart
+recovery. Setup does not display the session string. If the bot token changes,
+run `/workersetup` again. Existing `WORKER_REPAIR_*` settings still work when
+there is no session saved through the bot.
+
+In the owner's private chat with the bot, run `/workerrepair CHANNEL_ID`.
+The session account must own the channel or have permission to add admins.
+GateStream adds only confirmed missing auxiliary bots, with minimal admin
+rights and at least 60 seconds between additions. It leaves existing members
+and blocked accounts alone. On a Telegram rate limit, the run stops and saves
+the retry time in MongoDB. Check the result with `/workers CHANNEL_ID`.
 
 ## HTTP endpoints
 
@@ -163,7 +187,8 @@ SDK metadata and port `7860` configuration.
 
 Sign in at `/index` with a one-time link from the bot's `/catalog` command.
 Uploads outside an index session appear under **Single files**. Start and finish
-a folder with `/index`. The final command replies with a copyable ZIP URL.
+a folder with `/index`. The final command shows the ZIP name, a preview of its
+files, a copyable URL, and a **Download** button.
 Open the folder in the library to rename it or download the ZIP from the web.
 
 Cached folder ZIPs can be downloaded while they are being built and support
