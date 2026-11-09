@@ -68,7 +68,7 @@ test('preserves origin errors and redirects; reports network failures as 502', a
 
 test('forwards personal library POST forms, cookies and body without buffering ZIP responses', async (t) => {
   const folder = 'a'.repeat(43);
-  for (const path of ['/index/sign-in', '/index/sign-out',
+  for (const path of ['/index/sign-in', '/index/sign-in?setup=workers', '/index/sign-out', '/index/worker-setup',
                       '/index/share/' + folder, '/index/folder/' + folder + '/rename']) {
     const upstream = new Response('zip-or-login', { headers: { 'Set-Cookie': 'gatestream_index=session; HttpOnly', 'Cache-Control': 'private, no-store' } });
     t.mock.method(globalThis, 'fetch', async (url, options) => {
