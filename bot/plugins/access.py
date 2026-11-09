@@ -51,7 +51,7 @@ async def access_command(_, message):
 async def file_to_link_command(_, message):
     topic = forum_topic(message)
     if topic is None:
-        return await message.reply('Run /filetolink inside the File To Link forum topic.', quote=True)
+        return await message.reply('Telegram did not identify a forum topic for this message. Open File To Link and send /filetolink as a new message.', quote=True)
     try:
         await set_file_topic(topic)
     except Exception:
