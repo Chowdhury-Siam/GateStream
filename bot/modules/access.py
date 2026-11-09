@@ -15,6 +15,29 @@ def group_id(message):
     return chat.id if getattr(chat, 'type', None) in GROUP_TYPES else None
 
 
+def forum_topic(message):
+    chat_id = group_id(message)
+    topic_id = getattr(message, 'message_thread_id', None)
+    if chat_id is not None and type(topic_id) is int and topic_id > 1:
+        return {'chat_id': chat_id, 'topic_id': topic_id}
+    return None
+
+
+async def is_file_topic(message):
+    topic = forum_topic(message)
+    if topic is None:
+        return False
+    try:
+        return await db.db['bot_settings'].find_one({'_id': 'file_to_link', **topic}, {'_id': 1}) is not None
+    except Exception as error:
+        logger.warning('File To Link topic lookup failed (%s).', type(error).__name__)
+        return False
+
+
+async def set_file_topic(topic):
+    await db.db['bot_settings'].update_one({'_id': 'file_to_link'}, {'$set': topic}, upsert=True)
+
+
 def is_owner(user_id):
     return isinstance(user_id, int) and user_id > 0 and user_id == Telegram.OWNER_ID
 
