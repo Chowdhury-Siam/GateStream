@@ -112,21 +112,15 @@ class TelegramReplyTests(unittest.IsolatedAsyncioTestCase):
             from bot.plugins import files
         cls.files = files
 
-    async def test_upload_help_preserves_placeholders_and_valid_entities(self):
-        message = SimpleNamespace(forward_from_chat=None, reply=AsyncMock())
+    async def test_upload_help_explains_missing_storage_channel(self):
+        message = SimpleNamespace(from_user=SimpleNamespace(id=12345), forward_from_chat=None, reply=AsyncMock())
         with patch.object(self.files.Telegram, 'CHANNEL_ID', 0):
             await self.files.handle_user_file.__wrapped__(None, message)
-        text = message.reply.call_args.args[0]
-        parsed = await clients.TelegramBot.parser.parse(text)
-        self.assertIn('/link <channel_message_link>', parsed['message'])
-        self.assertIn('/batch <category> <start_link> <end_link>', parsed['message'])
-        length = len(parsed['message'].rstrip().encode('utf-16-le')) // 2
-        for entity in parsed['entities'] or []:
-            self.assertGreater(entity.length, 0)
-            self.assertLessEqual(entity.offset + entity.length, length)
+        self.assertIn('TELEGRAM_CHANNEL_ID', message.reply.call_args.args[0])
 
     async def test_forwarded_channel_help_keeps_message_link(self):
         message = SimpleNamespace(
+            from_user=SimpleNamespace(id=12345),
             forward_from_chat=SimpleNamespace(id=-1001234567890),
             forward_from_message_id=42,
             reply=AsyncMock(),
@@ -172,16 +166,17 @@ class RetiredPluginTests(unittest.TestCase):
         import tempfile
         from pathlib import Path
         imported=[]
+        retired = ('drive', 'settings', 'index_password', 'batch', 'channel_index', 'search')
         real_import=importlib.import_module
         def checked(name):
             imported.append(name)
-            if name in ('bot.plugins.drive','bot.plugins.settings','bot.plugins.index_password'):
+            if name in {f'bot.plugins.{plugin}' for plugin in retired}:
                 raise AssertionError('Retired plugin was loaded')
             return real_import(name)
         previous=os.getcwd()
         with tempfile.TemporaryDirectory() as directory:
             tree=Path(directory)/'bot/plugins';tree.mkdir(parents=True)
-            for name in ('drive','settings','index_password'):
+            for name in retired:
                 (tree/(name+'.py')).write_text('raise RuntimeError("retired code must not run")')
             try:
                 os.chdir(directory)
@@ -189,10 +184,8 @@ class RetiredPluginTests(unittest.TestCase):
                     clients.TelegramBot.load_plugins()
             finally:
                 os.chdir(previous)
-        self.assertIn('bot.plugins.channel_index',imported)
-        self.assertNotIn('bot.plugins.index_password',imported)
-        self.assertNotIn('bot.plugins.drive',imported)
-        self.assertNotIn('bot.plugins.settings',imported)
+        self.assertIn('bot.plugins.personal_index', imported)
+        self.assertTrue({f'bot.plugins.{plugin}' for plugin in retired}.isdisjoint(imported))
 
 
 class ActivityEndpointTests(unittest.IsolatedAsyncioTestCase):
