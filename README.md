@@ -126,7 +126,9 @@ Use a positive Telegram ID for a user and a negative ID for a group.
 
 1. As the bot owner, open the **File To Link** topic and send `/filetolink`.
    This saves the group ID and topic ID. To select a different topic, run the
-   same command there.
+   same command there. If `/start` says the current topic differs from the
+   saved one, the owner can rebind it by sending `/filetolink` there as a new
+   message. A MongoDB read error is reported separately in the owner menu.
 2. Use `/auth` in the topic to grant group access if the group is new to
    GateStream. Existing group and user grants apply.
 3. Give the bot access to ordinary messages in the group. A bot that is a
