@@ -86,9 +86,10 @@ async def handle_user_file(_, msg: Message):
         if mime_type.startswith(('video/', 'audio/')):
             actions.append(InlineKeyboardButton('Stream', url=stream_link))
         buttons = [actions, [InlineKeyboardButton('Revoke link', callback_data=f'rm_{code}')]]
-        caption = (f'<b>File ready</b>\n{escape(file_name)}\n'
-                   f'{human_size} · Duration {escape(duration_formatted)}\n\n'
-                   f'<code>{escape(dl_link)}</code>')
+        details = human_size
+        if duration:
+            details += f' · Duration {escape(duration_formatted)}'
+        caption = f'<b>File ready</b>\n{escape(file_name)}\n{details}\n\n<code>{escape(dl_link)}</code>'
         await status_msg.edit_text(text=caption, parse_mode=enums.ParseMode.HTML,
             reply_markup=InlineKeyboardMarkup(buttons), disable_web_page_preview=True)
 
