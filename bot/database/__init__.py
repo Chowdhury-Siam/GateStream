@@ -66,7 +66,6 @@ class MongoDatabase:
                     await collection.create_index([('channel_id', 1), ('message_id', 1), ('catalog_section', 1)])
             if self.db is not None:
                 await self.db['download_tickets'].create_index('expires_at', expireAfterSeconds=0)
-                await self.db['index_channels'].create_index('latest_seen')
                 await self.db['library_sessions'].create_index('expires_at', expireAfterSeconds=0)
                 await self.db['library_folders'].create_index([('user_id', 1), ('state', 1), ('created_at', -1)])
                 await self.db['direct_files'].create_index([('user_id', 1), ('personal_index_id', 1), ('created_at', -1)])
