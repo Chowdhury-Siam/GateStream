@@ -145,7 +145,7 @@ class ArchiveCacheTests(unittest.IsolatedAsyncioTestCase):
         restarted=ArchiveCache(self.directory.name,self.cache.max_bytes)
         self.assertEqual(await read(13,total,restarted),payload[13:])
 
-    async def test_live_builds_bypass_preparation_queue_and_are_bounded(self):
+    async def test_live_builds_queue_when_both_background_slots_are_busy(self):
         entered,release=asyncio.Event(),asyncio.Event()
         async def blocked(code):
             entered.set()
@@ -158,10 +158,14 @@ class ArchiveCacheTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(self.cache.jobs['p'*43]['task'].done())
         await self.cache.start('b'*43,self.files,blocked,self.expiry,progressive=True)
         await self.cache.start('c'*43,self.files,blocked,self.expiry,progressive=True)
-        with self.assertRaisesRegex(ValueError,'Live ZIP capacity'):
-            await self.cache.start('d'*43,self.files,blocked,self.expiry,progressive=True)
+        queued = 'd' * 43
+        await self.cache.start(queued, self.files, self.download, self.expiry, progressive=True)
+        total = archive_size(self.files)
+        self.assertEqual(self.cache.status(queued, total)['state'], 'queued')
+        self.assertFalse(self.cache.path(queued).exists())
         release.set()
-        await asyncio.wait_for(asyncio.gather(*(job['task'] for job in self.cache.jobs.values())),1)
+        self.assertEqual((await self.finish(queued))['state'], 'ready')
+        await asyncio.wait_for(asyncio.gather(*(job['task'] for job in self.cache.jobs.values())), 1)
 
     async def test_failed_live_source_unblocks_waiting_ranges_and_removes_partial(self):
         entered,release=asyncio.Event(),asyncio.Event()
