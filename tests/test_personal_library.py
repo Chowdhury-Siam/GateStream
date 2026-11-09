@@ -120,11 +120,11 @@ class PersonalLibraryTests(unittest.IsolatedAsyncioTestCase):
         folder_members = [dict(code=f'member-{i}', file_name=f'File {i} & extras.apk', file_size=10)
                           for i in range(1, 51)]
 
-        async def start(user_id, name, chat_id):
+        async def start(user_id, name, chat_id, *, topic_id=None):
             nonlocal draft
             draft = dict(_id=folder_id, user_id=user_id, name=name)
 
-        async def active(user_id, chat_id):
+        async def active(user_id, chat_id, *, topic_id=None):
             return draft if draft and draft['user_id'] == user_id else None
 
         async def finish(folder, name):
@@ -165,10 +165,8 @@ class PersonalLibraryTests(unittest.IsolatedAsyncioTestCase):
         create.assert_awaited_once_with(folder_members, 'My fifty files.zip', folder_id=folder_id, user_id=111)
         url = f'{library.Server.BASE_URL}/index/archive/{"b" * 43}/My%20fifty%20files.zip'
         text, = close.reply.call_args.args
-        self.assertIn('My fifty files.zip</b> · 50 files', text)
-        self.assertIn('File 1 &amp; extras.apk', text)
-        self.assertIn('… and 45 more', text)
-        self.assertIn(f'<code>{url}</code>', text)
+        self.assertEqual(text, f'<b>ZIP download</b>\n<b>My fifty files.zip</b> · 50 files\n\n'
+                               f'Copy link\n<code>{url}</code>')
         button = close.reply.call_args.kwargs['reply_markup'].inline_keyboard[0][0]
         self.assertEqual((button.text, button.url), ('Download', url))
 
