@@ -1,11 +1,11 @@
 """Start personal ZIP downloads from the Telegram index completion message."""
 import asyncio
 import logging
+from html import escape
 from urllib.parse import quote
 
 from hydrogram.enums import ChatType, ParseMode
 from hydrogram.errors import MessageNotModified
-from hydrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from bot.config import Server
 from bot.modules import personal_library as library
@@ -15,18 +15,13 @@ logger = logging.getLogger('bot')
 _jobs = {}
 
 
-def start_zip_button(folder_id):
-    return InlineKeyboardMarkup([[
-        InlineKeyboardButton('Start immediately', callback_data=f'zip:stream:{folder_id}'),
-    ]])
-
-
 async def select_zip(query):
+    # Allow the buttons already sent by older bot versions to recover a link.
     _, _, selection = query.data.partition(':')
     mode, _, folder_id = selection.partition(':')
     if (mode != 'stream' or not library.valid_token(folder_id)
             or not query.message or query.message.chat.type != ChatType.PRIVATE):
-        return await query.answer('Use Start immediately to download this ZIP.', show_alert=True)
+        return await query.answer('Open the folder from /catalog to get a ZIP link.', show_alert=True)
 
     key = (query.from_user.id, folder_id)
     try:
@@ -46,11 +41,10 @@ async def select_zip(query):
     await query.answer()
 
 
-async def _deliver_zip(message, folder):
+async def _zip_link_text(folder):
     from bot.server import catalog
 
     folder_id, user_id = folder['_id'], folder['user_id']
-    options = start_zip_button(folder_id)
     try:
         async with asyncio.timeout(25):
             files = await library.folder_files(user_id, folder_id)
@@ -60,15 +54,22 @@ async def _deliver_zip(message, folder):
             token = await catalog.create_archive(files, name, folder_id=folder_id, user_id=user_id)
 
         url = f'{Server.BASE_URL}/index/archive/{token}/{quote(name, safe="")}'
-        text = f'Your download can start now while the ZIP is built.\n{name}\n{url}'
-        options = InlineKeyboardMarkup([[InlineKeyboardButton('Download ZIP', url=url)]])
+        return f'<code>{escape(url)}</code>'
     except ValueError as error:
-        text = f'Could not start the ZIP. {error}'
+        return f'Could not start the ZIP. {escape(str(error))}'
     except Exception as error:
         logger.warning('Telegram ZIP request failed (%s).', type(error).__name__)
-        text = 'Could not finish the ZIP request. Tap Start immediately to try again.'
+        return 'Folder saved. Open it from /catalog to get a new ZIP link.'
 
-    kwargs = dict(parse_mode=ParseMode.DISABLED, reply_markup=options, disable_web_page_preview=True)
+
+async def reply_zip(message, folder):
+    await message.reply(await _zip_link_text(folder), quote=True, parse_mode=ParseMode.HTML,
+                        disable_web_page_preview=True)
+
+
+async def _deliver_zip(message, folder):
+    text = await _zip_link_text(folder)
+    kwargs = dict(parse_mode=ParseMode.HTML, disable_web_page_preview=True)
     try:
         await message.edit_text(text, **kwargs)
     except MessageNotModified:
