@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, Mock, patch
 
 from hydrogram import raw
 from hydrogram.enums import ChatMemberStatus, ChatType
-from hydrogram.errors import ChatAdminRequired, FloodWait, UserNotParticipant
+from hydrogram.errors import ChatAdminRequired, ChatWriteForbidden, FloodWait, UserNotParticipant
 
 with patch.dict(os.environ, {
     'TELEGRAM_API_ID': '12345', 'TELEGRAM_API_HASH': 'test_hash',
@@ -14,6 +14,8 @@ with patch.dict(os.environ, {
     'SPACE_ID': 'user/app', 'SPACE_HOST': 'user-app.hf.space',
 }, clear=True):
     from bot.modules import worker_repair as repair, worker_setup
+    with patch.object(repair.TelegramBot, 'add_handler'):
+        from bot.plugins import commands
 
 
 CHANNEL = -100123
@@ -27,16 +29,48 @@ def worker(ident):
 
 class WorkerDiagnosticsTests(unittest.IsolatedAsyncioTestCase):
     async def test_membership_distinguishes_missing_from_permission_failure(self):
-        profile = worker(7)
         observer = SimpleNamespace(resolve_peer=AsyncMock(side_effect=lambda value:
             PEER if isinstance(value, int) and value < 0 else raw.types.InputPeerUser(user_id=7, access_hash=5)),
             invoke=AsyncMock(side_effect=[ChatAdminRequired(), UserNotParticipant()]))
-        channels = [CHANNEL, CHANNEL - 1]
-        with patch.object(repair, 'worker_clients', [profile]), patch.object(repair, 'TelegramBot', observer):
-            rows, note = await repair.diagnose(channels)
-        self.assertEqual(rows[0][2], {CHANNEL: 'unverified', CHANNEL - 1: 'missing'})
-        self.assertFalse(note)
-        self.assertIn('1 missing · 1 unverified', repair.diagnostic_text(channels, rows))
+        with self.assertRaises(ChatAdminRequired):
+            await repair.membership(observer, CHANNEL, 'worker_7', expected_id=7)
+        self.assertEqual(await repair.membership(observer, CHANNEL, 'worker_7', expected_id=7), 'missing')
+
+    async def test_workers_command_probes_each_bot_and_lists_only_failures(self):
+        pool = [worker(index) for index in range(5)]
+        for index, client in enumerate(pool):
+            client.resolve_peer = AsyncMock(return_value=PEER)
+            client.rnd_id = Mock(return_value=index)
+            client.invoke = AsyncMock()
+        pool[2].invoke.side_effect = ChatWriteForbidden()
+        pool[3].invoke.side_effect = FloodWait(24)
+        pool[4].is_connected = False
+        status = SimpleNamespace(edit_text=AsyncMock())
+        msg = SimpleNamespace(from_user=SimpleNamespace(id=OWNER), command=['workers'],
+                              reply=AsyncMock(return_value=status))
+        with patch.object(commands.Telegram, 'CHANNEL_ID', CHANNEL), \
+             patch.object(repair, 'TelegramBot', pool[0]), patch.object(repair, 'worker_clients', pool):
+            await commands.workers_command(None, msg)
+
+        for index, client in enumerate(pool[:4]):
+            client.resolve_peer.assert_awaited_once_with(CHANNEL)
+            client.invoke.assert_awaited_once()
+            call = client.invoke.await_args
+            request, = call.args
+            self.assertIsInstance(request, raw.functions.messages.SendMessage)
+            self.assertIs(request.peer, PEER)
+            self.assertEqual(request.random_id, index)
+            self.assertTrue(request.silent)
+            self.assertIn(f'@worker_{index}', request.message)
+            self.assertEqual(call.kwargs, {'retries': 1, 'sleep_threshold': 0})
+        pool[4].invoke.assert_not_awaited()
+        text, = status.edit_text.await_args.args
+        self.assertNotIn('@worker_0', text)
+        self.assertNotIn('@worker_1', text)
+        self.assertIn('3 of 5 bots could not post', text)
+        self.assertIn('@worker_2 · Posting permission denied', text)
+        self.assertIn('@worker_3 · Rate limited for 24s', text)
+        self.assertIn('@worker_4 · Offline', text)
 
     async def test_addition_uses_only_minimum_rights_and_never_auto_retries(self):
         client = SimpleNamespace(resolve_peer=AsyncMock(return_value=raw.types.InputPeerUser(user_id=7, access_hash=8)),
