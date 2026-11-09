@@ -122,10 +122,16 @@ The bot starts with access for `OWNER_ID` only. The owner manages access with
 | Link a channel file | `/link [category] MESSAGE_LINK` (owner only) |
 
 Use a positive Telegram ID for a user and a negative ID for a group.
-A group grant applies in that group. Group members can open the bot menu,
-start and finish their own indexes, and upload by replying to a bot message
-with a file. Private chat and browser library sign-in require a direct
-user grant. The owner can always use the bot.
+A group grant applies in that group. Group members can open the bot menu
+and start and finish their own indexes. Open `/index`, send the files in
+the same group, and finish with `/index My folder`. For direct group posts,
+Telegram must deliver them to the bot. This works if the bot is a group admin
+or group privacy is disabled in BotFather and the bot is re-added to the group.
+With privacy mode enabled, send files as replies to the bot's index message.
+Outside an index, reply to a bot message to get an individual file link.
+
+Private chat and browser library sign-in require a direct user grant. The
+owner can always use the bot.
 
 Owner tools include `/stats`, `/workers`, `/workersetup`, `/workerrepair`, `/log`, `/sync_duration`,
 `/set_title`, `/revoke`, `/clean`, `/backup`, `/restore`, `/purge`,
