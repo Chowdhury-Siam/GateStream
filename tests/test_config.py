@@ -56,7 +56,7 @@ class ConfigTests(unittest.TestCase):
 
     def test_missing_credentials_fail_without_default_admin(self):
         config = self.load_config()
-        self.assertEqual(config['Telegram'].ADMIN_IDS, {0})
+        self.assertEqual(config['Telegram'].OWNER_ID, 0)
         with self.assertRaisesRegex(ValueError, 'OWNER_ID'):
             config['validate_config']()
 
