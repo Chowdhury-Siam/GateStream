@@ -52,6 +52,11 @@ class Telegram:
     # Only this user has access until the owner grants it in Telegram.
     OWNER_ID = _get_int(env.get("OWNER_ID", 0))
 
+    # Optional owner user session for repairing worker membership.
+    REPAIR_API_ID = _get_int(env.get('WORKER_REPAIR_API_ID', 0))
+    REPAIR_API_HASH = env.get('WORKER_REPAIR_API_HASH', '').strip()
+    REPAIR_SESSION = env.get('WORKER_REPAIR_SESSION', '').strip()
+
     # Optional storage / bin channel and destination for first-start user notices
     CHANNEL_ID = _get_int(env.get("TELEGRAM_CHANNEL_ID", env.get("CHANNEL_ID", env.get("BIN_CHANNEL_ID", 0))), 0)
     SECRET_CODE_LENGTH = _get_int(env.get("SECRET_CODE_LENGTH", 24), 24)
