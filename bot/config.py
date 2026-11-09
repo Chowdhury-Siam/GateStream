@@ -49,17 +49,9 @@ class Telegram:
     # Worker pool combining primary + worker tokens (preserving order, removing duplicates)
     WORKER_TOKENS = list(dict.fromkeys([BOT_TOKEN] + MULTI_BOT_TOKENS)) if MULTI_BOT_TOKENS else [BOT_TOKEN]
 
-    # Owner & Auth/Admin Users
+    # Only this user has access until the owner grants it in Telegram.
     OWNER_ID = _get_int(env.get("OWNER_ID", 0))
-    _raw_auth_users = env.get("AUTH_USERS", "")
-    AUTH_USERS = [
-        int(uid.strip()) for uid in _raw_auth_users.replace(",", " ").split() if uid.strip().lstrip("-").isdigit()
-    ]
-    ADMIN_IDS = set([OWNER_ID] + AUTH_USERS)
 
-    # Allowed Users for general usage (empty = everyone allowed)
-    ALLOWED_USER_IDS = env.get("ALLOWED_USER_IDS", "").split()
-    
     # Optional storage / bin channel and destination for first-start user notices
     CHANNEL_ID = _get_int(env.get("TELEGRAM_CHANNEL_ID", env.get("CHANNEL_ID", env.get("BIN_CHANNEL_ID", 0))), 0)
     SECRET_CODE_LENGTH = _get_int(env.get("SECRET_CODE_LENGTH", 24), 24)
