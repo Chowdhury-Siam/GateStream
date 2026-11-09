@@ -2,6 +2,7 @@
 import asyncio
 import hmac
 import secrets
+from contextlib import suppress
 
 from quart import Blueprint, make_response, redirect, render_template, request, url_for
 
@@ -9,6 +10,7 @@ from bot.config import Server, Telegram
 from bot.modules import personal_library as library
 from bot.modules.archive import archive_filename
 from bot.modules.static import get_human_size
+from bot.modules.worker_setup import setup
 from .catalog import _private, create_archive
 from .error import abort
 
@@ -21,6 +23,10 @@ CSRF_COOKIE = 'gatestream_index_csrf'
 async def private_headers(response):
     _private(response)
     response.headers['Referrer-Policy'] = 'no-referrer'
+    if request.path == '/index/worker-setup' or (
+        request.path == '/index/sign-in' and request.args.get('setup') == 'workers'
+    ):
+        response.headers['X-Frame-Options'] = 'DENY'
     return response
 
 
@@ -80,15 +86,47 @@ async def index():
 
 @bp.route('/index/sign-in', methods=['GET', 'POST'])
 async def sign_in():
+    worker_setup = request.args.get('setup') == 'workers'
+    if worker_setup and not Server.BASE_URL.startswith('https://'):
+        abort(403, 'Worker setup requires an HTTPS BASE_URL.')
     if request.method == 'POST':
-        token = await library.exchange_login((await form_data()).get('token'))
+        token = await library.exchange_login((await form_data()).get('token'), worker_setup=worker_setup)
         if token is None:
-            return await page(400, error='That sign-in link expired or was already used. Ask the bot for a new link.')
-        response = redirect(url_for('.index'), code=303)
-        response.set_cookie(library.COOKIE, token, max_age=library.SESSION_AGE, httponly=True,
-                            secure=_secure(), samesite='Lax', path='/index')
+            return await page(400, worker_sign_in=worker_setup,
+                error='That sign-in link expired or was already used. Ask the bot for a new link.')
+        if worker_setup:
+            response = redirect(url_for('.worker_setup'), code=303)
+            response.set_cookie(library.SETUP_COOKIE, token, max_age=2 * library.LOGIN_AGE, httponly=True,
+                                secure=True, samesite='Strict', path=url_for('.worker_setup'))
+        else:
+            response = redirect(url_for('.index'), code=303)
+            response.set_cookie(library.COOKIE, token, max_age=library.SESSION_AGE, httponly=True,
+                                secure=_secure(), samesite='Lax', path='/index')
         return response
-    return await page(confirm_sign_in=True)
+    return await page(confirm_sign_in=True, worker_sign_in=worker_setup)
+
+
+@bp.route('/index/worker-setup', methods=['GET', 'POST'])
+async def worker_setup():
+    browser = request.cookies.get(library.SETUP_COOKIE)
+    if not Server.BASE_URL.startswith('https://') or await library.session_user(browser, worker_setup=True) is None:
+        abort(403, 'Open a new /workersetup link in the owner’s private chat.')
+    message = ''
+    if request.method == 'POST':
+        step, message = await setup.submit(browser, await form_data())
+    else:
+        step = setup.step(browser)
+    response = await page(worker_step=step, worker_message=message)
+    response.headers['Content-Security-Policy'] = (
+        "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'"
+    )
+    if step == 'done':
+        response.delete_cookie(library.SETUP_COOKIE, path=url_for('.worker_setup'), secure=True,
+                               httponly=True, samesite='Strict')
+        with suppress(Exception):
+            async with asyncio.timeout(3):
+                await library.end_session(browser, worker_setup=True)
+    return response
 
 
 @bp.post('/index/sign-out')
