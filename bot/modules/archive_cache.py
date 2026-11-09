@@ -18,6 +18,10 @@ logger = logging.getLogger('server')
 ARCHIVE_AGE = 24 * 60 * 60
 
 
+class ArchiveCapacityError(ValueError):
+    pass
+
+
 class ArchiveCache:
     # ponytail: one process owns this cache; use shared job leases for replicas.
     def __init__(self, root, max_bytes):
@@ -52,14 +56,14 @@ class ArchiveCache:
             if token in self.jobs:
                 return
             if progressive and sum(job['progressive'] and not job['task'].done() for job in self.jobs.values()) >= 2:
-                raise ValueError('Live ZIP capacity is full. Try again shortly.')
+                raise ArchiveCapacityError('Live ZIP capacity is full. Try again shortly.')
             used = await asyncio.to_thread(self._prune)
             reserved = sum(job['total'] for job in self.jobs.values() if not job['task'].done())
             if total + used + reserved > self.max_bytes or len(self.jobs) >= 128:
-                raise ValueError('ZIP preparation capacity is full. Select fewer files or try again later.')
+                raise ArchiveCapacityError('ZIP cache capacity is full.')
             free = (await asyncio.to_thread(shutil.disk_usage, self.root)).free
             if total + reserved + 64 * 1024 * 1024 > free:
-                raise ValueError('There is not enough space to prepare this ZIP. Select fewer files.')
+                raise ArchiveCapacityError('There is not enough space to cache this ZIP.')
             job = dict(state='queued', bytes=0, total=total, expires=expires,
                 progressive=progressive, changed=asyncio.Event(), samples=deque(maxlen=256))
             self.jobs[token] = job
