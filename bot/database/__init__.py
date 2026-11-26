@@ -28,9 +28,9 @@ class MongoDatabase:
             self.anime = self.db['anime']
             self.webseries = self.db['webseries']
             self.direct_files = self.db['direct_files']
-            logger.info("Connected to MongoDB database: %s", Database.DATABASE_NAME)
+            logger.info("MongoDB client configured.")
         except Exception as e:
-            logger.error("Failed to connect to MongoDB: %s", e)
+            logger.error("MongoDB setup failed (%s).", type(e).__name__)
             raise e
 
         # Initialize upstream OmniArchiverDB connection (authoritative catalog source)
@@ -48,7 +48,7 @@ class MongoDatabase:
                 self.omni_db = self._client['OmniArchiverDB']
             logger.info("Upstream catalog connection initialized.")
         except Exception as e:
-            logger.warning("Could not initialize upstream catalog connection: %s", e)
+            logger.warning("Upstream database setup failed (%s).", type(e).__name__)
 
     async def create_indexes(self):
         """Ensures high-speed O(1) indexes to eliminate query latency and CPU spikes."""
@@ -72,7 +72,18 @@ class MongoDatabase:
                 await self.db['direct_files'].create_index('source_key', sparse=True)
             logger.info("MongoDB database indexes ensured.")
         except Exception as e:
-            logger.warning("Error creating MongoDB indexes: %s", e)
+            logger.warning("MongoDB index setup failed (%s).", type(e).__name__)
+
+    def close(self):
+        for client in (self._omni_client, self._client):
+            if client is not None:
+                try:
+                    client.close()
+                except Exception as error:
+                    logger.warning('MongoDB close failed (%s).', type(error).__name__)
+        self._omni_client = self._client = None
+        self.db = self.omni_db = None
+        self.movies = self.anime = self.webseries = self.direct_files = None
 
     def get_collection(self, category: str):
         cat = category.lower()
