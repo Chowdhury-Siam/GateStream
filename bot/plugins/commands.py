@@ -1,3 +1,4 @@
+from hydrogram import Client
 import asyncio
 import time
 import shutil
@@ -15,6 +16,8 @@ from bot.modules.bot_menu import send_menu
 from bot.modules.access import group_id
 from bot.modules.activity import activity
 from bot.modules import worker_repair
+from bot.modules.lifecycle import spawn
+from bot.config import Resources
 
 _repair_task = None
 _worker_check_lock = asyncio.Lock()
@@ -35,7 +38,7 @@ def get_readable_time(seconds: int) -> str:
     
     return " ".join(result) or "0s"
 
-@TelegramBot.on_message(filters.command(['start', 'help']) & (filters.private | filters.group) & filters.text)
+@Client.on_message(filters.command(['start', 'help']) & (filters.private | filters.group) & filters.text)
 @verify_user
 async def start_command(client, msg: Message):
     is_start = msg.command[0].split('@', 1)[0].lower() == 'start'
@@ -47,7 +50,7 @@ async def start_command(client, msg: Message):
     if not in_group and is_start:
         await notify_new_user(client, msg.from_user)
 
-@TelegramBot.on_message(filters.command('stats') & filters.private)
+@Client.on_message(filters.command('stats') & filters.private)
 @verify_admin
 async def stats_command(_, msg: Message):
     snapshot = activity.snapshot()
@@ -83,12 +86,12 @@ async def stats_command(_, msg: Message):
     )
     await msg.reply(text, quote=True, parse_mode=enums.ParseMode.DISABLED)
 
-@TelegramBot.on_message(filters.command('log') & filters.private)
+@Client.on_message(filters.command('log') & filters.private)
 @verify_user
 @verify_admin
 async def log_command(_, msg: Message):
     try:
-        await msg.reply_document('event-log.txt', quote=True)
+        await msg.reply_document(str(Resources.LOG_FILE), quote=True)
     except Exception as e:
         await msg.reply(f"❌ Failed to send log file: `{e}`", quote=True)
 
@@ -116,7 +119,7 @@ async def _worker_channel(msg):
     return channel_id, ''
 
 
-@TelegramBot.on_message(filters.command(['workers', 'bots']) & filters.private)
+@Client.on_message(filters.command(['workers', 'bots']) & filters.private)
 @verify_admin
 async def workers_command(_, msg: Message):
     if _worker_check_lock.locked():
@@ -139,13 +142,13 @@ async def workers_command(_, msg: Message):
                 await msg.reply(text, quote=True, parse_mode=enums.ParseMode.DISABLED)
 
 
-@TelegramBot.on_message(filters.command('workersetup') & filters.private)
+@Client.on_message(filters.command('workersetup') & filters.private)
 @verify_admin
 async def workersetup_command(_, msg: Message):
     await send_login_link(msg, worker_setup=True)
 
 
-@TelegramBot.on_message(filters.command('workerrepair') & filters.private)
+@Client.on_message(filters.command('workerrepair') & filters.private)
 @verify_admin
 async def workerrepair_command(_, msg: Message):
     global _repair_task
@@ -170,4 +173,4 @@ async def workerrepair_command(_, msg: Message):
             result = f'Worker repair could not proceed ({type(error).__name__}).'
         await report(result)
 
-    _repair_task = asyncio.create_task(run())
+    _repair_task = spawn(run())
