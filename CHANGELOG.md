@@ -1,0 +1,84 @@
+# Changelog
+
+## 2.0.33 — 2026-11-26
+
+This full GitHub distribution combines the v2.0.33 configuration, lifecycle and
+FreeBSD fixes with the original v2.0.31 GitHub Worker, deployment workflow and
+hosting guides. The original GitHub and Lite Python cores were byte-identical.
+The fixes were developed against Lite revision
+`6ba04417f3309c67328558e3f167c75cd9cb1b21` (application version 2.0.31).
+
+### Configuration
+
+- Replace the regex assignment scanner with python-dotenv's parsing grammar.
+  The scanner searched comments and retained the first match, so the commented
+  Docker `PORT=7860` example and three example worker tokens could override later
+  active values. It also read `start.sh` ahead of `.env` and discarded empty values.
+- Centralize settings with per-key precedence: system environment (including
+  explicit empty values), `.env`, `config.env`, literal legacy `start.sh`
+  assignments, application defaults. Do not execute launchers or shell expansion.
+- Support UTF-8 BOM, CRLF/LF, quotes, multiline strings, inline comments and
+  literal special characters. Report malformed assignments by file/line without
+  including their contents. Duplicate active file keys use the last assignment.
+- Validate ports, numeric limits, required settings and URLs before creating
+  service connections. Keep existing names/aliases, Spaces defaults and Docker
+  environment behavior. Invalid integers no longer silently become defaults.
+- Load ZIP/media cache paths and budgets through the same configuration as the
+  HTTP/Telegram services. Add optional bounded IO/Motor/handler worker settings,
+  Telegram transmission concurrency, memory thresholds and shutdown timeout.
+- Make the token editing script use parsed configuration and dotenv updates,
+  preserving comments and writing `.env` instead of rewriting example comments
+  or launcher scripts. Hidden token input is available without CLI arguments.
+
+### Telegram workers and handlers
+
+- Deduplicate worker tokens, accept whitespace/comma/semicolon separators, and
+  skip blank, malformed and placeholder entries. An empty configured token list
+  starts no auxiliary bots.
+- Isolate failed worker authentication/startup, close its partial transport and
+  executor, keep healthy workers available and skip failed clients during media
+  selection/heartbeat. Configured clients remain visible to worker diagnostics.
+- Preserve existing membership checks, slow repair, encrypted owner session
+  setup and all stored worker records. Close temporary repair/setup clients and
+  expiry tasks as part of their lifecycle.
+- Investigate and fix `No plugin loaded`: bound client decorators registered
+  commands immediately but left no discoverable handler metadata. Use Hydrogram
+  class decorators with the existing explicit active-module list. The loader now
+  registers all 22 command/callback handlers once; retired overlays remain blocked.
+
+### Startup, shutdown and hosting
+
+- Run services in one `asyncio.run` lifecycle, with one owner of SIGINT/SIGTERM.
+  Prebind the configured socket before connecting MongoDB or Telegram. Report
+  readiness only after Uvicorn has completed actual startup.
+- Log version, OS/Python, effective HTTP address, ZIP budget, MongoDB ping and
+  connected/configured fleet counts. Redact configured secrets, token patterns
+  and database credentials in rendered third-party messages and tracebacks.
+- Drain HTTP, cancel/await application jobs, close cached ZIP builders and login
+  setup, flush counters, stop all Telegram clients and close MongoDB before the
+  event loop/executors are shut down. Attempt each cleanup independently.
+- Route `/restart` and memory-pressure restarts through that cleanup, then replace
+  the process only after the loop and its executor have finished.
+- Use platform-specific optional allocator hooks; correct macOS RSS units, avoid
+  Linux filesystem assumptions and make memory thresholds configurable.
+- Apply cache budgets before writes. Atomically publish media chunks, remove
+  incomplete files after quota/write failures, reconcile missing entries and
+  enforce a reduced media budget on startup. Preserve unexpired ZIPs for resume.
+  Respect a configurable free-space margin and handle account quota failures
+  even when shared filesystem free space appears sufficient.
+- Replace the Bash/pgrep watchdog with a POSIX launcher and project-specific
+  advisory-lock supervisor. One supervisor is sufficient; optional Cron recovery
+  must follow provider rules. Add a dedicated Serv00/FreeBSD deployment guide.
+
+### Compatibility and verification
+
+No database names, collections, schemas, stored records, URL formats or external
+Worker routes are migrated. Existing access restrictions, personal folders,
+automatic group topic handling, APK names/MIME types, Telegram reference recovery,
+streaming/ranges, background ZIP preparation and persistent transfer totals remain.
+No Drive functionality is introduced.
+
+Regression tests cover configuration grammar/precedence, worker authentication
+isolation and disabling, actual handler discovery, cache limits/quota errors,
+portable memory paths, occupied ports, task draining, and real local HTTP
+SIGINT/SIGTERM shutdown. See `VALIDATION.md` for the tested environments and limits.
