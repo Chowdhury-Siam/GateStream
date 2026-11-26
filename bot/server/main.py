@@ -18,6 +18,7 @@ from bot.modules.telegram import (
 from bot.modules.static import get_human_size
 from bot.modules.memory import flush_ram, check_memory_circuit_breaker
 from bot.modules.activity import activity
+from bot.modules.lifecycle import spawn
 from bot.modules.cache import get_cached_chunk, put_cached_chunk, is_head_or_tail, init_cache, is_chunk_cached, prefetch_tail_chunk, prefetch_head_chunk
 
 try:
@@ -173,9 +174,9 @@ async def transmit_file(file_code, range_allowed=True, parallel=False, internal=
         # Proactively trigger detached background pre-fetch of both Head and Tail if opening chunk 0
         if offset == 0 and not internal:
             if not is_chunk_cached(file_code, 0):
-                asyncio.create_task(prefetch_head_chunk(file_code, total_chunks, target_msg=file_msg, channel_id=channel_id, message_id=message_id))
+                spawn(prefetch_head_chunk(file_code, total_chunks, target_msg=file_msg, channel_id=channel_id, message_id=message_id))
             if total_chunks > 4 and not is_chunk_cached(file_code, total_chunks - 1):
-                asyncio.create_task(prefetch_tail_chunk(file_code, total_chunks, target_msg=file_msg, channel_id=channel_id, message_id=message_id))
+                spawn(prefetch_tail_chunk(file_code, total_chunks, target_msg=file_msg, channel_id=channel_id, message_id=message_id))
 
         # 1. Fast Path: Serve any consecutive leading chunks from Head & Tail SSD cache (0.5ms response time)
         # Supports in-flight waiting if chunk is currently being pre-cached by a worker!
@@ -285,7 +286,7 @@ async def transmit_file(file_code, range_allowed=True, parallel=False, internal=
                 async with aclosing(iter_parallel_ranges(read_span, curr_offset, curr_chunks_needed)) as source:
                     async for chunk in source:
                         if is_head_or_tail(curr_offset, total_chunks):
-                            asyncio.create_task(put_cached_chunk(file_code, curr_offset, chunk, total_chunks))
+                            spawn(put_cached_chunk(file_code, curr_offset, chunk, total_chunks))
                         if bytes_streamed == 0:
                             chunk = chunk[current_start % chunk_size:]
                         chunk = chunk[:content_length - bytes_streamed]
@@ -331,7 +332,7 @@ async def transmit_file(file_code, range_allowed=True, parallel=False, internal=
                         chunk = await asyncio.wait_for(get_media_chunk(worker, msg, target_idx), timeout=18.0)
                         if chunk:
                             if is_head_or_tail(target_idx, total_chunks):
-                                asyncio.create_task(put_cached_chunk(file_code, target_idx, chunk, total_chunks))
+                                spawn(put_cached_chunk(file_code, target_idx, chunk, total_chunks))
                             return chunk
                     except asyncio.TimeoutError:
                         mark_worker_cooldown(w_name, 15)
@@ -451,7 +452,7 @@ async def transmit_file(file_code, range_allowed=True, parallel=False, internal=
                         async with aclosing(iter_media_chunks(worker_client, msg, curr_offset, end_chunk - curr_offset)) as stream:
                             async for chunk in stream:
                                 if is_head_or_tail(curr_offset, total_chunks):
-                                    asyncio.create_task(put_cached_chunk(file_code, curr_offset, chunk, total_chunks))
+                                    spawn(put_cached_chunk(file_code, curr_offset, chunk, total_chunks))
 
                                 if bytes_streamed == 0:
                                     trim_start = current_start % chunk_size
