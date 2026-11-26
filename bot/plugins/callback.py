@@ -1,3 +1,4 @@
+from hydrogram import Client
 from hydrogram.types import CallbackQuery
 from bot.config import Telegram
 from bot.clients import TelegramBot
@@ -8,7 +9,7 @@ from bot.modules.decorators import verify_user
 from bot.modules.telegram import get_message
 from bot.modules.index_zip import select_zip
 
-@TelegramBot.on_callback_query()
+@Client.on_callback_query()
 @verify_user
 async def manage_callback(bot, q: CallbackQuery):
     query = q.data or ''
