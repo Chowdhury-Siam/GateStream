@@ -1,17 +1,17 @@
 import os
 import asyncio
+import re
+import tempfile
+import shutil
+from bot.config import Resources
 from collections import OrderedDict
 from logging import getLogger
 from math import ceil
 
 logger = getLogger('cache')
 
-# Cache storage directory on local VPS SSD
-REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-CACHE_DIR = os.path.join(REPO_ROOT, "cache", "media")
-
-# Maximum disk cache size: 500 MB (stores Head 4MB + Tail 2MB for ~80 active videos)
-MAX_CACHE_BYTES = 500 * 1024 * 1024
+CACHE_DIR = str(Resources.MEDIA_CACHE_DIR)
+MAX_CACHE_BYTES = Resources.MEDIA_CACHE_MAX_MB * 1024 * 1024
 
 _CACHE_INDEX: OrderedDict[tuple[str, int], int] = OrderedDict()
 _TOTAL_CACHE_SIZE = 0
@@ -43,7 +43,7 @@ async def prefetch_chunk(file_code: str, chunk_idx: int, total_chunks: int, targ
     Proactively fetches and caches a critical chunk (Head 0 or Tail EOF) in a detached background task.
     Uses in-flight locking so concurrent requests can wait for completion instead of duplicate downloading.
     """
-    if is_chunk_cached(file_code, chunk_idx):
+    if MAX_CACHE_BYTES == 0 or is_chunk_cached(file_code, chunk_idx):
         return
 
     key = (file_code, chunk_idx)
@@ -99,6 +99,8 @@ def init_cache():
         os.makedirs(CACHE_DIR, exist_ok=True)
         total = 0
         for fname in os.listdir(CACHE_DIR):
+            if fname.startswith('.chunk-') and fname.endswith('.part'):
+                os.unlink(os.path.join(CACHE_DIR, fname))
             if fname.endswith(".chunk"):
                 fpath = os.path.join(CACHE_DIR, fname)
                 try:
@@ -113,6 +115,11 @@ def init_cache():
                 except Exception:
                     pass
         _TOTAL_CACHE_SIZE = total
+        while _TOTAL_CACHE_SIZE > MAX_CACHE_BYTES and _CACHE_INDEX:
+            key, size = next(iter(_CACHE_INDEX.items()))
+            os.remove(os.path.join(CACHE_DIR, f'{key[0]}_{key[1]}.chunk'))
+            _CACHE_INDEX.pop(key)
+            _TOTAL_CACHE_SIZE -= size
         _INITIALIZED = True
         logger.info("Initialized Head & Tail disk cache: %d chunk(s) loaded (%.2f MB total).", len(_CACHE_INDEX), total / (1024 * 1024))
     except Exception as e:
@@ -125,6 +132,8 @@ async def get_cached_chunk(file_code: str, chunk_idx: int, wait_in_flight: bool 
     waits for the in-flight task to complete instead of immediately returning None.
     Returns bytes if present, or None if not cached.
     """
+    if MAX_CACHE_BYTES == 0 or not re.fullmatch(r"[A-Za-z0-9_-]+", file_code):
+        return None
     if not _INITIALIZED:
         init_cache()
 
@@ -168,90 +177,47 @@ async def get_cached_chunk(file_code: str, chunk_idx: int, wait_in_flight: bool 
         logger.warning("Error reading cached chunk %s_%d: %s", file_code, chunk_idx, e)
 
     # If file was missing or corrupt, evict key from index
+    global _TOTAL_CACHE_SIZE
     async with _CACHE_LOCK:
         if key in _CACHE_INDEX:
-            _CACHE_INDEX.pop(key, None)
+            _TOTAL_CACHE_SIZE -= _CACHE_INDEX.pop(key, 0)
     return None
 
 async def put_cached_chunk(file_code: str, chunk_idx: int, data: bytes, total_chunks: int):
-    """
-    Persists a critical head/tail chunk to local SSD with automatic LRU eviction.
-    """
+    """Bound admission before atomic writes; quota failures never publish partial chunks."""
+    global _TOTAL_CACHE_SIZE
+    if (not data or len(data) > MAX_CACHE_BYTES or not is_head_or_tail(chunk_idx, total_chunks)
+            or not re.fullmatch(r'[A-Za-z0-9_-]+', file_code)):
+        return
     if not _INITIALIZED:
         init_cache()
-
-    if not is_head_or_tail(chunk_idx, total_chunks):
-        return
-    if not data:
-        return
-
     key = (file_code, chunk_idx)
-    chunk_len = len(data)
-    filename = f"{file_code}_{chunk_idx}.chunk"
-    path = os.path.join(CACHE_DIR, filename)
-
-    try:
-        def _write():
-            with open(path, 'wb') as f:
-                f.write(data)
-
-        await asyncio.to_thread(_write)
-
-        global _TOTAL_CACHE_SIZE
-        async with _CACHE_LOCK:
-            old_size = _CACHE_INDEX.pop(key, 0)
-            _TOTAL_CACHE_SIZE -= old_size
-
-            _CACHE_INDEX[key] = chunk_len
-            _TOTAL_CACHE_SIZE += chunk_len
-
-            # Evict oldest chunks if exceeding MAX_CACHE_BYTES
-            while _TOTAL_CACHE_SIZE > MAX_CACHE_BYTES and _CACHE_INDEX:
-                evict_key, evict_size = _CACHE_INDEX.popitem(last=False)
-                _TOTAL_CACHE_SIZE -= evict_size
-                evict_file = os.path.join(CACHE_DIR, f"{evict_key[0]}_{evict_key[1]}.chunk")
-                try:
-                    if os.path.exists(evict_file):
-                        os.remove(evict_file)
-                except Exception:
-                    pass
-    except Exception as e:
-        logger.warning("Error saving cached chunk %s_%d: %s", file_code, chunk_idx, e)
-
-def evict_file_chunks(file_code: str):
-    """Removes any cached SSD chunks for a specific file code so replaced media streams fresh."""
-    global _TOTAL_CACHE_SIZE
-    if not file_code:
-        return
-    try:
-        keys_to_remove = [k for k in _CACHE_INDEX.keys() if k[0] == file_code]
-        for key in keys_to_remove:
-            size = _CACHE_INDEX.pop(key, 0)
-            _TOTAL_CACHE_SIZE -= size
-            fpath = os.path.join(CACHE_DIR, f"{key[0]}_{key[1]}.chunk")
+    path = os.path.join(CACHE_DIR, f'{file_code}_{chunk_idx}.chunk')
+    async with _CACHE_LOCK:
+        try:
+            # Perform the short bounded disk operation under this lock. Running it in
+            # a detached thread would allow cancellation to publish an unindexed file.
+            old = _CACHE_INDEX.get(key, 0)
+            while _TOTAL_CACHE_SIZE - old + len(data) > MAX_CACHE_BYTES:
+                victim = next((k for k in _CACHE_INDEX if k != key), None)
+                if victim is None:
+                    return
+                os.remove(os.path.join(CACHE_DIR, f'{victim[0]}_{victim[1]}.chunk'))
+                _TOTAL_CACHE_SIZE -= _CACHE_INDEX.pop(victim)
+            if shutil.disk_usage(CACHE_DIR).free < len(data) + Resources.CACHE_FREE_MB * 1024 * 1024:
+                logger.warning('Media cache write skipped: insufficient free disk space.')
+                return
+            temporary = None
             try:
-                if os.path.exists(fpath):
-                    os.remove(fpath)
-            except Exception:
-                pass
-        if keys_to_remove:
-            logger.info("Evicted %d cached chunk(s) for file %s.", len(keys_to_remove), file_code)
-    except Exception as e:
-        logger.warning("Error evicting chunks for %s: %s", file_code, e)
-
-def clear_media_cache():
-    """Removes all cached chunks from disk to free space immediately."""
-    global _TOTAL_CACHE_SIZE
-    try:
-        if os.path.exists(CACHE_DIR):
-            for fname in os.listdir(CACHE_DIR):
-                if fname.endswith(".chunk"):
-                    try:
-                        os.remove(os.path.join(CACHE_DIR, fname))
-                    except Exception:
-                        pass
-        _CACHE_INDEX.clear()
-        _TOTAL_CACHE_SIZE = 0
-        logger.info("Cleared all media cache chunks from disk.")
-    except Exception as e:
-        logger.warning("Error clearing media cache: %s", e)
+                fd, temporary = tempfile.mkstemp(prefix='.chunk-', suffix='.part', dir=CACHE_DIR)
+                with os.fdopen(fd, 'wb') as output:
+                    output.write(data)
+                os.replace(temporary, path)
+            finally:
+                if temporary and os.path.exists(temporary):
+                    os.unlink(temporary)
+            _CACHE_INDEX.pop(key, None)
+            _CACHE_INDEX[key] = len(data)
+            _TOTAL_CACHE_SIZE += len(data) - old
+        except OSError as error:
+            logger.warning('Media cache write skipped (%s); check disk quota and permissions.', type(error).__name__)
