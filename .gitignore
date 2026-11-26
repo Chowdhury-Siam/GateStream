@@ -62,3 +62,6 @@ node_modules/
 token.json
 credentials.json
 
+
+# Project-specific watchdog ownership lock
+.watchdog.lock
