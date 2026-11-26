@@ -12,7 +12,7 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from hydrogram import Client, raw
 from hydrogram.errors import FloodWait, PasswordHashInvalid, PhoneCodeInvalid, SessionPasswordNeeded
 
-from bot.config import Telegram
+from bot.config import Resources, Telegram
 from bot.database import db
 
 SETUP_AGE = 5 * 60
@@ -71,19 +71,10 @@ class WorkerSetup:
         expiry, self.expiry = self.expiry, None
         if expiry and expiry is not asyncio.current_task():
             expiry.cancel()
+            await asyncio.gather(expiry, return_exceptions=True)
         if pending:
-            client = pending.client
-            with suppress(Exception):
-                async with asyncio.timeout(5):
-                    if client.is_connected:
-                        await client.disconnect()
-                    else:
-                        # A timed-out connect can create a transport before Hydrogram sets is_connected.
-                        try:
-                            if client.session:
-                                await client.session.stop()
-                        finally:
-                            await client.storage.close()
+            from bot.clients import close_client
+            await close_client(pending.client, idempotent=False)
 
     async def close(self):
         async with self.lock:
@@ -136,7 +127,8 @@ class WorkerSetup:
                 or not re.fullmatch(r'\+[1-9][0-9]{6,14}', phone)):
             return 'start', 'Enter a valid API ID, API hash, and phone number with country code.'
         client = Client('worker_repair_setup', api_id=int(api_id), api_hash=api_hash,
-                        in_memory=True, no_updates=True, sleep_threshold=0)
+                        in_memory=True, no_updates=True, sleep_threshold=0, workers=1,
+                        max_concurrent_transmissions=Resources.MAX_TRANSMISSIONS)
         self.pending = PendingLogin(browser, client, phone)
         await client.connect()
         self.pending.code_hash = (await client.send_code(phone)).phone_code_hash
