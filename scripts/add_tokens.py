@@ -1,62 +1,32 @@
-import sys
+"""Add worker tokens without reading comments or modifying launcher scripts."""
+import getpass
 import os
-import re
+from pathlib import Path
+import runpy
+import sys
+from dotenv import set_key
+
 
 def main():
-    if len(sys.argv) < 2:
-        print("❌ Usage: python scripts/add_tokens.py <token1> <token2> ...")
-        return
+    project = Path(__file__).resolve().parents[1]
+    config = runpy.run_path(str(project / 'bot' / 'config.py'))
+    parse = config['parse_worker_tokens']
+    raw = ' '.join(sys.argv[1:]) if len(sys.argv) > 1 else getpass.getpass('Worker tokens (hidden; comma or space separated): ')
+    new, ignored = parse(raw, config['Telegram'].BOT_TOKEN)
+    if not new:
+        print('No valid worker tokens supplied. Nothing changed.')
+        return 1
+    directory = Path.cwd() if any((Path.cwd() / name).is_file() for name in ('.env', 'config.env', 'start.sh')) else project
+    target = directory / '.env'
+    existing = config['Telegram'].MULTI_BOT_TOKENS
+    combined, _ = parse(' '.join([*existing, *new]), config['Telegram'].BOT_TOKEN)
+    target.touch(mode=0o600, exist_ok=True)
+    set_key(str(target), 'MULTI_BOT_TOKENS', ' '.join(combined), quote_mode='always', encoding='utf-8-sig')
+    print(f'Updated {target.name}: {len(combined)} worker tokens. Restart the bot to apply.')
+    if 'MULTI_BOT_TOKENS' in os.environ or 'BOT_TOKENS' in os.environ:
+        print('A system worker-token variable overrides this file; update or unset it in your process manager.')
+    return 0
 
-    # Extract all tokens from CLI arguments (support space and comma separated)
-    raw_args = " ".join(sys.argv[1:])
-    new_tokens = [t.strip() for t in raw_args.replace(",", " ").split() if t.strip()]
-    
-    if not new_tokens:
-        print("❌ No valid tokens provided.")
-        return
 
-    target_file = None
-    for fn in (".env", "config.env", "start.sh"):
-        if os.path.exists(fn):
-            target_file = fn
-            break
-
-    if not target_file:
-        target_file = ".env"
-        with open(target_file, "a", encoding="utf-8"):
-            pass
-
-    with open(target_file, "r", encoding="utf-8") as f:
-        content = f.read()
-
-    pattern = r'(MULTI_BOT_TOKENS\s*=\s*["\'])([^"\']*)(["\'])'
-    match = re.search(pattern, content)
-
-    if match:
-        prefix, existing, suffix = match.groups()
-        existing_tokens = [t.strip() for t in existing.replace(",", " ").split() if t.strip()]
-        combined = list(dict.fromkeys(existing_tokens + new_tokens))
-        updated_line = f'{prefix}{" ".join(combined)}{suffix}'
-        new_content = re.sub(pattern, updated_line, content)
-    else:
-        pattern_unquoted = r'(MULTI_BOT_TOKENS\s*=\s*)([^\r\n#]*)'
-        match_unquoted = re.search(pattern_unquoted, content)
-        if match_unquoted:
-            prefix, existing = match_unquoted.groups()
-            existing_tokens = [t.strip() for t in existing.replace(",", " ").split() if t.strip()]
-            combined = list(dict.fromkeys(existing_tokens + new_tokens))
-            new_content = re.sub(pattern_unquoted, f'MULTI_BOT_TOKENS="{" ".join(combined)}"', content)
-        else:
-            combined = list(dict.fromkeys(new_tokens))
-            new_content = content.rstrip() + f'\nMULTI_BOT_TOKENS="{" ".join(combined)}"\n'
-
-    with open(target_file, "w", encoding="utf-8") as f:
-        f.write(new_content)
-
-    print(f"✅ Successfully updated {target_file}!")
-    print(f"🤖 Total worker bot tokens: {len(combined)}")
-    print(f"➕ Added {len(new_tokens)} token(s).")
-    print("👉 Now send /restart to boot up all worker bots!")
-
-if __name__ == "__main__":
-    main()
+if __name__ == '__main__':
+    raise SystemExit(main())
