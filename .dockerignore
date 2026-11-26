@@ -20,3 +20,5 @@ tests
 *.pickle
 token.json
 credentials.json
+
+.watchdog.lock
