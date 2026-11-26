@@ -11,8 +11,8 @@ from hydrogram.errors import (
     UserBannedInChannel, UserNotParticipant,
 )
 
-from bot.clients import TelegramBot, worker_clients
-from bot.config import Telegram
+from bot.clients import TelegramBot, worker_clients, close_client
+from bot.config import Resources, Telegram
 from bot.database import db
 from bot.modules.worker_setup import repair_credentials
 
@@ -99,7 +99,8 @@ async def probe_workers(channel_id):
 def repair_client(credentials):
     api_id, api_hash, session = credentials
     return Client('worker_repair', api_id=api_id, api_hash=api_hash,
-                  session_string=session, in_memory=True, no_updates=True, sleep_threshold=0)
+                  session_string=session, in_memory=True, no_updates=True, sleep_threshold=0,
+                  workers=1, max_concurrent_transmissions=Resources.MAX_TRANSMISSIONS)
 
 
 async def _get_channel(client, channel_id):
@@ -209,8 +210,4 @@ async def repair_channel(channel_id, report):
     except Exception as error:
         return f'Repair stopped after {added} additions ({type(error).__name__}). Check channel permissions and try again.'
     finally:
-        if client.is_connected:
-            try:
-                await client.disconnect()
-            except Exception:
-                pass
+        await close_client(client, idempotent=False)
