@@ -1,3 +1,4 @@
+from hydrogram import Client
 import os
 import sys
 import io
@@ -6,8 +7,10 @@ from hydrogram import filters
 from hydrogram.types import Message
 from bot.clients import TelegramBot
 from bot.modules.decorators import verify_user, verify_admin
+from bot.config import PROJECT_ROOT
+from bot.modules.lifecycle import request_restart
 
-@TelegramBot.on_message(filters.command(['restart', 'reboot']) & filters.private)
+@Client.on_message(filters.command(['restart', 'reboot']) & filters.private)
 @verify_user
 @verify_admin
 async def restart_command(_, msg: Message):
@@ -17,25 +20,12 @@ async def restart_command(_, msg: Message):
 
     # Save state to edit message after reboot
     try:
-        with open('.restart_state.txt', 'w') as f:
+        with open(PROJECT_ROOT / '.restart_state.txt', 'w') as f:
             f.write(f"{msg.chat.id} {restart_msg.id} {time.time()}")
     except Exception:
         pass
 
-    # Touch start.sh to update timestamp if present
-    try:
-        if os.path.exists("start.sh"):
-            os.utime("start.sh", None)
-    except Exception:
-        pass
-
-    await asyncio.sleep(1.5)
-
-    from bot.modules.activity_store import activity_store
-    await activity_store.flush()
-
-    # Replace current python process
-    os.execl(sys.executable, sys.executable, "-m", "bot")
+    request_restart()
 
 try:
     from hydrogram.errors import FloodWait
@@ -45,7 +35,7 @@ except ImportError:
     except ImportError:
         FloodWait = Exception
 
-@TelegramBot.on_message(filters.command(['purge', 'clear']) & (filters.private | filters.group))
+@Client.on_message(filters.command(['purge', 'clear']) & (filters.private | filters.group))
 @verify_user
 @verify_admin
 async def purge_command(client, msg: Message):
@@ -154,7 +144,7 @@ async def purge_command(client, msg: Message):
         except Exception:
             pass
 
-@TelegramBot.on_message(filters.command(['clean', 'gc', 'flush']) & filters.private)
+@Client.on_message(filters.command(['clean', 'gc', 'flush']) & filters.private)
 @verify_user
 @verify_admin
 async def clean_memory_command(_, msg: Message):
@@ -182,7 +172,7 @@ async def clean_memory_command(_, msg: Message):
         quote=True
     )
 
-@TelegramBot.on_message(filters.command(['sync_duration', 'backfill', 'sync_metadata']) & filters.private)
+@Client.on_message(filters.command(['sync_duration', 'backfill', 'sync_metadata']) & filters.private)
 @verify_user
 @verify_admin
 async def sync_duration_command(_, msg: Message):
@@ -255,7 +245,7 @@ async def sync_duration_command(_, msg: Message):
     except Exception as e:
         await status.edit_text(f"❌ Error during sync: `{e}`")
 
-@TelegramBot.on_message(filters.command(['revoke', 'del', 'delete_link', 'rm']) & filters.private)
+@Client.on_message(filters.command(['revoke', 'del', 'delete_link', 'rm']) & filters.private)
 @verify_user
 @verify_admin
 async def revoke_command(_, msg: Message):
@@ -334,7 +324,7 @@ async def revoke_command(_, msg: Message):
         quote=True
     )
 
-@TelegramBot.on_message(filters.command(['backup', 'db_dump', 'dump_db']) & filters.private)
+@Client.on_message(filters.command(['backup', 'db_dump', 'dump_db']) & filters.private)
 @verify_user
 @verify_admin
 async def backup_database_command(client, msg: Message):
@@ -418,7 +408,7 @@ async def backup_database_command(client, msg: Message):
     except Exception as e:
         await status.edit_text(f"❌ **Failed to create database backup:** `{e}`")
 
-@TelegramBot.on_message(filters.command(['restore', 'db_restore', 'import_db']) & filters.private)
+@Client.on_message(filters.command(['restore', 'db_restore', 'import_db']) & filters.private)
 @verify_user
 @verify_admin
 async def restore_database_command(client, msg: Message):
@@ -512,7 +502,7 @@ async def restore_database_command(client, msg: Message):
 
 
 
-@TelegramBot.on_message(filters.command(['set_title', 'rename', 'name']) & filters.private)
+@Client.on_message(filters.command(['set_title', 'rename', 'name']) & filters.private)
 @verify_admin
 async def set_title_command(_, msg: Message):
     """Updates or sets the title for an existing anime/series batch or movie in MongoDB."""
