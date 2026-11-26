@@ -1,3 +1,4 @@
+from hydrogram import Client
 import asyncio
 from html import escape
 
@@ -20,13 +21,13 @@ UPLOAD_MEDIA = (filters.private | filters.group) & (
 )
 
 
-@TelegramBot.on_message(UPLOAD_MEDIA)
+@Client.on_message(UPLOAD_MEDIA)
 @verify_file_user
 async def handle_user_file(_, msg: Message):
     await save_upload(msg)
 
 
-@TelegramBot.on_message(filters.command('link') & filters.group & filters.text)
+@Client.on_message(filters.command('link') & filters.group & filters.text)
 @verify_file_user
 async def group_link_command(_, msg: Message):
     media = msg.reply_to_message
