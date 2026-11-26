@@ -1,3 +1,4 @@
+from hydrogram import Client
 from hydrogram import enums, filters
 
 from bot.clients import TelegramBot
@@ -16,7 +17,7 @@ ACCESS_HELP = (
 )
 
 
-@TelegramBot.on_message(filters.command(['auth', 'unauth']) & (filters.private | filters.group) & filters.text)
+@Client.on_message(filters.command(['auth', 'unauth']) & (filters.private | filters.group) & filters.text)
 @verify_admin
 async def access_command(_, message):
     command, *args = message.command
@@ -46,7 +47,7 @@ async def access_command(_, message):
     await message.reply(f'{kind} {target}: {action}.', quote=True, parse_mode=enums.ParseMode.DISABLED)
 
 
-@TelegramBot.on_message(filters.command('filetolink') & filters.group & filters.text)
+@Client.on_message(filters.command('filetolink') & filters.group & filters.text)
 @verify_admin
 async def file_to_link_command(_, message):
     topic = forum_topic(message)
