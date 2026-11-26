@@ -1,3 +1,4 @@
+from hydrogram import Client
 import logging
 
 from hydrogram import enums, filters
@@ -12,14 +13,14 @@ from bot.modules.index_zip import reply_zip
 logger = logging.getLogger('bot')
 
 
-@TelegramBot.on_message(filters.command('index') & (filters.private | filters.group) & filters.text)
+@Client.on_message(filters.command('index') & (filters.private | filters.group) & filters.text)
 @verify_file_user
 async def index_command(_, message):
     parts = message.text.split(maxsplit=1)
     await personal_index(message, parts[1] if len(parts) > 1 else '')
 
 
-@TelegramBot.on_message(filters.command('catalog') & filters.private & filters.text)
+@Client.on_message(filters.command('catalog') & filters.private & filters.text)
 @verify_user
 async def catalog_command(_, message):
     await library.send_login_link(message)
