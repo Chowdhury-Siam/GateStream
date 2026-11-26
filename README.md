@@ -10,6 +10,17 @@ direct downloads, and API links. The bot manages your catalog in MongoDB;
 the server retrieves media from Telegram as it streams. A dark interface,
 warm gold accents, and a gateway mark carry the identity from bot to browser.
 
+## GateStream v2.0.33 — GitHub package
+
+This complete GitHub package includes the updated Python origin, Telegram bot,
+web interface, Cloudflare Worker, GitHub Actions deployment workflow, Dockerfile,
+deployment guides and regression tests. See [CHANGELOG.md](CHANGELOG.md) for the
+configuration, worker startup, FreeBSD/resource and graceful shutdown fixes.
+
+For Serv00/FreeBSD deployment, follow [SERV00.md](SERV00.md). Keep your existing
+`.env`, session files, database settings and Worker deployment name when upgrading.
+Install the updated `requirements.txt` before restarting.
+
 ## Choose your package
 
 | Package | Purpose |
@@ -66,7 +77,14 @@ Run only one deployment per main Telegram bot token.
 
 ## Configuration
 
-Use `.env` locally. On Hugging Face, use **Settings → Variables and secrets**;
+Use `.env` locally. Configuration precedence per key is system environment
+(including explicit empty values), `.env`, legacy `config.env`, literal `start.sh`
+assignments, then defaults. Comments and examples are never loaded. Empty optional
+worker tokens disable extras; invalid numeric values produce validation errors.
+All services use the same centralized configuration. See [SERV00.md](SERV00.md)
+for parser rules, resource limits, reserved ports and safe shutdown.
+
+On Hugging Face, use **Settings → Variables and secrets**;
 do not upload a filled `.env` file.
 
 | Setting | Required | Purpose |
@@ -91,14 +109,14 @@ On the bot host, `BASE_URL` is the address users should open. For your existing
 Worker deployment:
 
 ```dotenv
-BASE_URL=https://ftl-stream-proxy.ftl-556.workers.dev
+BASE_URL=https://your-worker.example
 ```
 
 In GitHub Actions settings, `CLOUDFLARE_ORIGIN_URL` is the **direct hosting
 address**, not a `/stream/...` link and not the Worker URL. Example:
 
 ```text
-https://siamreal-hfvps.hf.space
+https://your-origin.example
 ```
 
 The GitHub version includes a workflow that accepts that setting as a repository
