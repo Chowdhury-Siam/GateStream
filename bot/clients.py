@@ -1,7 +1,9 @@
+import asyncio
 from hydrogram import Client, enums
+from hydrogram.errors import AccessTokenExpired, AccessTokenInvalid
 from logging import getLogger
 from itertools import cycle
-from bot.config import Telegram
+from bot.config import PROJECT_ROOT, Resources, Telegram
 from bot.database import db
 from bot.modules.forum_updates import install_forum_parser
 
@@ -10,6 +12,8 @@ logger = getLogger('bot')
 # Main Bot Client (Processes user commands, interactions, and updates)
 TelegramBot = Client(
     name='bot_main',
+    workdir=str(PROJECT_ROOT),
+    workers=Resources.HANDLER_WORKERS,
     api_id=Telegram.API_ID,
     api_hash=Telegram.API_HASH,
     bot_token=Telegram.BOT_TOKEN,
@@ -19,7 +23,7 @@ TelegramBot = Client(
         'access', 'admin', 'callback', 'commands', 'files', 'link', 'personal_index',
     ]),
     sleep_threshold=-1,
-    max_concurrent_transmissions=10,
+    max_concurrent_transmissions=Resources.MAX_TRANSMISSIONS,
     ipv6=False
 )
 install_forum_parser(TelegramBot)
@@ -48,7 +52,7 @@ def init_worker_clients():
     worker_clients.append(TelegramBot)
     
     # 2. Add extra worker bots from MULTI_BOT_TOKENS
-    for idx, token in enumerate(Telegram.MULTI_BOT_TOKENS, start=1):
+    for idx, token in enumerate(dict.fromkeys(Telegram.MULTI_BOT_TOKENS), start=1):
         if token and token != Telegram.BOT_TOKEN:
             worker = Client(
                 name=f'worker_{idx}',
@@ -56,7 +60,7 @@ def init_worker_clients():
                 api_hash=Telegram.API_HASH,
                 bot_token=token,
                 sleep_threshold=-1,
-                max_concurrent_transmissions=10,
+                max_concurrent_transmissions=Resources.MAX_TRANSMISSIONS,
                 workers=1,
                 in_memory=True,
                 no_updates=True,
@@ -86,7 +90,8 @@ def get_worker_client() -> Client:
     # Filter healthy clients (cooldown expired or not set)
     healthy_workers = [
         w for w in worker_clients
-        if now >= _worker_cooldowns.get(getattr(w, 'name', ''), 0)
+        if w.is_connected and w.me and not getattr(w, '_gatestream_closed', False)
+        and now >= _worker_cooldowns.get(getattr(w, 'name', ''), 0)
     ]
 
     # If all auxiliary workers are on cooldown, fall back to TelegramBot
@@ -105,12 +110,15 @@ def get_worker_client() -> Client:
     return healthy_workers[0]
 
 async def start_all_clients():
-    import os
-    import time
-
     # Connect MongoDB
-    db.connect()
-    await db.db.command('ping')
+    try:
+        db.connect()
+        async with asyncio.timeout(15):
+            await db.db.command('ping')
+    except Exception as error:
+        logger.error('MongoDB connection failed (%s).', type(error).__name__)
+        raise
+    logger.info('MongoDB connection verified.')
     from bot.modules.activity_store import activity_store
     await activity_store.flush()
     
@@ -124,10 +132,86 @@ async def start_all_clients():
     from bot.modules.bot_menu import register_commands
     await register_commands(TelegramBot)
 
-    # Check and resolve pending restart notification
-    if os.path.exists('.restart_state.txt'):
+    # A failed worker stays configured for /workers, but is not retried by the heartbeat.
+    # Start Worker Clients
+    init_worker_clients()
+    logger.info("Starting Worker Clients pool (%d total)...", len(worker_clients))
+    for idx, client in enumerate(worker_clients):
+        if client == TelegramBot:
+            continue
         try:
-            with open('.restart_state.txt', 'r') as f:
+            async with asyncio.timeout(30):
+                await client.start()
+            bot_username = getattr(client.me, 'username', 'N/A')
+            logger.info("Worker client #%d (@%s) started successfully.", idx, bot_username)
+        except Exception as error:
+            logger.warning('Worker #%d could not start (%s).', idx, type(error).__name__)
+            await close_client(client)
+            if isinstance(error, (AccessTokenInvalid, AccessTokenExpired)):
+                logger.warning('Worker #%d authentication failed. Check its configured token.', idx)
+    connected = sum(bool(client.is_connected and client.me) for client in worker_clients)
+    logger.info('Worker clients connected: %d/%d (including primary).', connected, len(worker_clients))
+
+def get_all_worker_clients() -> list[Client]:
+    """Returns a list of all active worker clients (including TelegramBot as worker 0)."""
+    return list(worker_clients)
+
+async def close_client(client, *, idempotent=True):
+    if idempotent and getattr(client, '_gatestream_closed', False):
+        return
+    client._gatestream_closed = True
+    try:
+        async with asyncio.timeout(10):
+            if getattr(client, 'is_initialized', False):
+                await client.stop()
+            elif client.is_connected:
+                await client.disconnect()
+            else:
+                # connect() may have opened storage/transport before it was canceled.
+                if getattr(client, 'session', None) is not None:
+                    await client.session.stop()
+                if getattr(client, 'storage', None) is not None:
+                    await client.storage.close()
+    except Exception as error:
+        logger.warning('Telegram client cleanup failed (%s); closing remaining transports.', type(error).__name__)
+        # A long command can exhaust stop()'s dispatcher deadline. Still close the
+        # transports and storage before asyncio.run shuts down its executor.
+        sessions = list(getattr(client, 'media_sessions', {}).values())
+        if getattr(client, 'session', None) is not None:
+            sessions.append(client.session)
+        for session in sessions:
+            try:
+                async with asyncio.timeout(3):
+                    await session.stop()
+            except Exception:
+                logger.warning('Telegram transport cleanup could not complete.')
+        if getattr(client, 'storage', None) is not None:
+            try:
+                await client.storage.close()
+            except Exception:
+                logger.warning('Telegram storage cleanup could not complete.')
+    finally:
+        executor = getattr(client, 'executor', None)
+        if executor is not None:
+            executor.shutdown(wait=True, cancel_futures=True)
+
+
+async def stop_all_clients():
+    logger.info('Stopping Telegram clients...')
+    outcomes = await asyncio.gather(*(close_client(client) for client in
+        dict.fromkeys([*worker_clients, TelegramBot])), return_exceptions=True)
+    for outcome in outcomes:
+        if isinstance(outcome, Exception):
+            logger.warning('Telegram cleanup failed (%s).', type(outcome).__name__)
+    logger.info('Telegram clients stopped.')
+
+
+async def notify_restart():
+    import os
+    import time
+    if (PROJECT_ROOT / '.restart_state.txt').exists():
+        try:
+            with open(PROJECT_ROOT / '.restart_state.txt', 'r') as f:
                 parts = f.read().strip().split()
             if len(parts) >= 2:
                 chat_id = int(parts[0])
@@ -141,44 +225,13 @@ async def start_all_clients():
                     message_id=msg_id,
                     text=(
                         f"✅ **GateStream Bot rebooted successfully{duration_str}!**\n\n"
-                        f"🚀 All worker bots, MongoDB connection, and web server are active."
+                        f"🚀 MongoDB is connected and the HTTP server is ready. See /workers for fleet status."
                     )
                 )
-        except Exception as e:
-            logger.warning("Failed to edit restart notification: %s", e)
+        except Exception as error:
+            logger.warning('Could not send restart notice (%s).', type(error).__name__)
         finally:
             try:
-                os.remove('.restart_state.txt')
+                os.remove(PROJECT_ROOT / '.restart_state.txt')
             except Exception:
                 pass
-    
-    # Start Worker Clients
-    init_worker_clients()
-    logger.info("Starting Worker Clients pool (%d total)...", len(worker_clients))
-    for idx, client in enumerate(worker_clients):
-        if client == TelegramBot:
-            continue
-        try:
-            await client.start()
-            bot_username = getattr(client.me, 'username', 'N/A')
-            logger.info("Worker client #%d (@%s) started successfully.", idx, bot_username)
-        except Exception as e:
-            logger.warning("Failed to start worker client #%d: %s", idx, e)
-
-def get_all_worker_clients() -> list[Client]:
-    """Returns a list of all active worker clients (including TelegramBot as worker 0)."""
-    return list(worker_clients)
-
-async def stop_all_clients():
-    logger.info("Stopping all clients...")
-    for client in worker_clients:
-        if client == TelegramBot:
-            continue
-        try:
-            if client.is_connected:
-                await client.stop()
-        except Exception:
-            pass
-    if TelegramBot.is_connected:
-        await TelegramBot.stop()
-    logger.info("All clients stopped.")
