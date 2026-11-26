@@ -1,3 +1,4 @@
+from hydrogram import Client
 import aiohttp
 from bot.modules.metadata import Classifier
 from hydrogram import filters
@@ -10,7 +11,7 @@ from bot.modules.parser import parse_telegram_link
 from bot.modules.telegram import get_message, get_file_properties, is_media_message
 from bot.modules.static import MediaLinksText, FileLinksText, InvalidLinkText, get_human_size
 
-@TelegramBot.on_message(filters.command(['link', 'movie', 'anime', 'series', 'link_anime', 'link_movie', 'link_series']) & filters.private)
+@Client.on_message(filters.command(['link', 'movie', 'anime', 'series', 'link_anime', 'link_movie', 'link_series']) & filters.private)
 @verify_user
 @verify_admin
 async def link_command(_, msg: Message):
