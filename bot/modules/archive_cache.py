@@ -5,13 +5,14 @@ import os
 import re
 import shutil
 import time
-from contextvars import Context
 from pathlib import Path
 from collections import deque
 
 import aiofiles
 
 from bot.modules.archive import archive_size, stream_archive
+from bot.config import Resources
+from bot.modules.lifecycle import spawn
 
 logger = logging.getLogger('server')
 ARCHIVE_AGE = 24 * 60 * 60
@@ -39,9 +40,6 @@ class ArchiveCache:
     def _prune(self):
         self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
         now = time.time()
-        for token, job in list(self.jobs.items()):
-            if job['expires'] <= now and job['task'].done():
-                del self.jobs[token]
         for path in self.root.iterdir():
             if path.suffix == '.zip' and path.stat().st_mtime + ARCHIVE_AGE <= now:
                 path.unlink(missing_ok=True)
@@ -55,18 +53,27 @@ class ArchiveCache:
         async with self.lock:
             if token in self.jobs:
                 return
-            used = await asyncio.to_thread(self._prune)
-            reserved = sum(job['total'] for job in self.jobs.values() if not job['task'].done())
+            for old_token, old_job in list(self.jobs.items()):
+                if old_job['expires'] <= time.time() and old_job['task'].done():
+                    del self.jobs[old_token]
+            try:
+                used = await asyncio.to_thread(self._prune)
+                free = (await asyncio.to_thread(shutil.disk_usage, self.root)).free
+            except OSError:
+                raise ArchiveCapacityError('ZIP cache storage is unavailable. Check permissions and quota.') from None
+            reserved = sum(job['total'] for job in self.jobs.values() if job['state'] in ('queued', 'preparing'))
             if total + used + reserved > self.max_bytes or len(self.jobs) >= 128:
                 raise ArchiveCapacityError('ZIP cache capacity is full.')
-            free = (await asyncio.to_thread(shutil.disk_usage, self.root)).free
-            if total + reserved + 64 * 1024 * 1024 > free:
+            if total + reserved + Resources.CACHE_FREE_MB * 1024 * 1024 > free:
                 raise ArchiveCapacityError('There is not enough space to cache this ZIP.')
             job = dict(state='queued', bytes=0, total=total, expires=expires,
                 progressive=progressive, changed=asyncio.Event(), samples=deque(maxlen=256))
             self.jobs[token] = job
             # A build must outlive the POST and must not retain its request context.
-            job['task'] = asyncio.create_task(self._build(token, files, download, job), context=Context())
+            job['task'] = spawn(self._build(token, files, download, job))
+            if job['task'] is None:
+                del self.jobs[token]
+                raise ArchiveCapacityError('ZIP preparation is shutting down.')
 
     async def _build(self, token, files, download, job):
         final = self.path(token)
@@ -106,7 +113,10 @@ class ArchiveCache:
             job['state'] = 'failed'
             logger.warning('ZIP preparation failed (%s).', type(error).__name__)
         finally:
-            partial.unlink(missing_ok=True)
+            try:
+                partial.unlink(missing_ok=True)
+            except OSError:
+                logger.warning('Could not remove partial ZIP; check cache directory permissions.')
             self._notify(job)
 
     @staticmethod
@@ -169,7 +179,4 @@ class ArchiveCache:
             await asyncio.gather(*tasks, return_exceptions=True)
 
 
-archive_cache = ArchiveCache(
-    os.environ.get('ZIP_CACHE_DIR') or Path(__file__).resolve().parents[2] / 'cache' / 'archives',
-    max(1, int(os.environ.get('ZIP_CACHE_MAX_MB', '8192'))) * 1024 * 1024,
-)
+archive_cache = ArchiveCache(Resources.ZIP_CACHE_DIR, Resources.ZIP_CACHE_MAX_MB * 1024 * 1024)
