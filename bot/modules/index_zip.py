@@ -11,6 +11,7 @@ from hydrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from bot.config import Server
 from bot.modules import personal_library as library
 from bot.modules.archive import archive_filename
+from bot.modules.lifecycle import spawn
 
 logger = logging.getLogger('bot')
 _jobs = {}
@@ -36,7 +37,9 @@ async def select_zip(query):
     if key in _jobs:
         return await query.answer('This ZIP is already starting.')
 
-    task = asyncio.create_task(_deliver_zip(query.message, folder))
+    task = spawn(_deliver_zip(query.message, folder))
+    if task is None:
+        return await query.answer('The server is shutting down. Try again shortly.')
     _jobs[key] = task
     task.add_done_callback(lambda _: _jobs.pop(key, None))
     await query.answer()
