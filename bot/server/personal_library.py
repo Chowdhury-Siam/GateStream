@@ -1,4 +1,4 @@
-"""Personal upload listings and explicit ZIP sharing."""
+"""Personal upload listings and browser sign-in."""
 import asyncio
 import hmac
 import secrets
@@ -8,10 +8,8 @@ from quart import Blueprint, make_response, redirect, render_template, request, 
 
 from bot.config import Server, Telegram
 from bot.modules import personal_library as library
-from bot.modules.archive import archive_filename
 from bot.modules.static import get_human_size
 from bot.modules.worker_setup import setup
-from .catalog import _private, create_archive
 from .error import abort
 
 bp = Blueprint('personal_library', __name__)
@@ -21,7 +19,9 @@ CSRF_COOKIE = 'gatestream_index_csrf'
 
 @bp.after_request
 async def private_headers(response):
-    _private(response)
+    response.headers['Cache-Control'] = 'private, no-store, max-age=0'
+    response.headers['Vary'] = 'Cookie'
+    response.headers['X-Robots-Tag'] = 'noindex, nofollow'
     response.headers['Referrer-Policy'] = 'no-referrer'
     if request.path == '/index/worker-setup' or (
         request.path == '/index/sign-in' and request.args.get('setup') == 'workers'
@@ -75,12 +75,11 @@ async def index():
     user_id = await viewer()
     if user_id is None:
         return await page()
-    tab = 'single' if request.args.get('tab') == 'single' else 'index'
     query = request.args.get('q', '').strip()[:100]
     raw_page = request.args.get('page', '')
     number = max(1, int(raw_page)) if raw_page.isascii() and raw_page.isdigit() and len(raw_page) <= 8 else 1
-    items, total, number, pages = await library.page_items(user_id, tab, query, number, PAGE_SIZE)
-    return await page(signed_in=True, tab=tab, items=items, total=total, query=query,
+    items, total, number, pages = await library.page_items(user_id, query, number, PAGE_SIZE)
+    return await page(signed_in=True, items=items, total=total, query=query,
                       number=number, pages=pages)
 
 
@@ -137,54 +136,3 @@ async def sign_out():
     response.delete_cookie(library.COOKIE, path='/index')
     return response
 
-
-@bp.route('/index/folder/<string:folder_id>')
-async def folder_detail(folder_id):
-    user_id = await viewer()
-    if user_id is None:
-        return redirect(url_for('.index'))
-    folder = await library.folder_by_id(folder_id, user_id)
-    if folder is None:
-        abort(404, 'Folder not found.')
-    files = await library.folder_files(user_id, folder_id)
-    return await page(signed_in=True, tab='index', folder=folder, files=files)
-
-
-@bp.post('/index/folder/<string:folder_id>/rename')
-async def rename_folder(folder_id):
-    user_id = await viewer()
-    if user_id is None:
-        abort(401, 'Sign in to rename a folder.')
-    form = await form_data()
-    try:
-        name = library.folder_name(form.get('name', ''))
-    except ValueError as error:
-        abort(400, str(error))
-    if not await library.rename_folder(folder_id, user_id, name):
-        abort(404, 'Folder not found.')
-    return redirect(url_for('.folder_detail', folder_id=folder_id), code=303)
-
-
-@bp.route('/index/share/<string:folder_id>', methods=['GET', 'POST'])
-async def share_folder(folder_id):
-    folder = await library.folder_by_id(folder_id)
-    if folder is None:
-        abort(404, 'Shared folder not found.')
-    if request.method != 'POST':
-        count = await library.folder_count(folder['user_id'], folder_id)
-        return await page(shared=folder, total=count)
-    await form_data()
-    files = []
-    try:
-        async with asyncio.timeout(25):
-            files = await library.folder_files(folder['user_id'], folder_id)
-            if not files:
-                return await page(410, shared=folder, total=0, error='This folder has no downloadable files.')
-            filename = archive_filename(folder['name'])
-            token = await create_archive(files, filename,
-                                         folder_id=folder_id, user_id=folder['user_id'])
-    except ValueError as error:
-        return await page(413, shared=folder, total=len(files), error=str(error))
-    except TimeoutError:
-        abort(503, 'The server could not create the ZIP link in time. Please try again.')
-    return redirect(url_for('catalog.download_archive', token=token, filename=filename), code=303)
