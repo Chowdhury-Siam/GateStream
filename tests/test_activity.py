@@ -95,18 +95,17 @@ class ActivityTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_download_counts_merge_ranges_and_exclude_incomplete_streams(self):
         async def stream(data): yield data
-        async def serve(start,data,kind='single',key='file'):
+        async def serve(start,data,key='file'):
             return b''.join([chunk async for chunk in self.activity.track_stream(
-                stream(data),len(data),key,download=(kind,start,6,b'client'))])
+                stream(data),len(data),key,download=(start,6,b'client'))])
         await serve(2,b'cd')
         await serve(0,b'abc')
         self.assertEqual(self.activity.snapshot()['phases']['media']['single_downloads'],0)
         await serve(4,b'ef')
         await serve(4,b'ef')
         await serve(0,b'ab')
-        await serve(0,b'abcdef',kind='zip',key='zip-token')
         phase=self.activity.snapshot()['phases']['media']
-        self.assertEqual((phase['single_downloads'],phase['zip_downloads']),(1,1))
+        self.assertEqual(phase['single_downloads'],1)
         restarted=module.TransferActivity()
         restarted.restore(self.activity.checkpoint())
         self.assertEqual(restarted.snapshot()['phases']['media']['single_downloads'],1)
@@ -114,7 +113,7 @@ class ActivityTests(unittest.IsolatedAsyncioTestCase):
         self.now=20
         await serve(0,b'abcdef')
         self.assertEqual(self.activity.snapshot()['phases']['media']['single_downloads'],2)
-        pending=self.activity.track_stream(stream(b'ab'),6,'other',download=('single',0,6,b'client'))
+        pending=self.activity.track_stream(stream(b'ab'),6,'other',download=(0,6,b'client'))
         async for _ in pending: pass
         self.assertEqual(self.activity.snapshot()['phases']['media']['single_downloads'],2)
 
@@ -125,39 +124,36 @@ class ActivityTests(unittest.IsolatedAsyncioTestCase):
                 yield b'abcdef'
             finally:
                 cleanup.set()
-        for category in ('single', 'zip'):
-            stream = self.activity.track_stream(source(), 6, category,
-                download=(category, 0, 6, b'manager'))
-            self.assertEqual(await anext(stream), b'abcdef')
-            self.assertEqual(self.activity.snapshot()['phases']['media'][category + '_downloads'], 1)
-            await stream.aclose()
+        stream = self.activity.track_stream(source(), 6, 'file', download=(0, 6, b'manager'))
+        self.assertEqual(await anext(stream), b'abcdef')
+        self.assertEqual(self.activity.snapshot()['phases']['media']['single_downloads'], 1)
+        await stream.aclose()
         phase = self.activity.snapshot()['phases']['media']
-        self.assertEqual((phase['completed'], phase['incomplete'], phase['active']), (2, 0, 0))
+        self.assertEqual((phase['completed'], phase['incomplete'], phase['active']), (1, 0, 0))
         self.assertTrue(cleanup.is_set())
 
     async def test_aborted_open_ranges_combine_delivered_segments_without_double_counting(self):
         async def source(data):
             yield data
             await asyncio.Event().wait()
-        for category in ('single', 'zip'):
-            async def segment(start, payload):
-                stream = self.activity.track_stream(source(payload), 6 - start, category,
-                    download=(category, start, 6, b'manager'))
-                await anext(stream)
-                await stream.aclose()
-            await segment(0, b'ab')
-            await segment(2, b'cd')
-            await segment(0, b'ab')  # Retry overlaps, not a new file.
-            self.assertEqual(self.activity.snapshot()['phases']['media'][category + '_downloads'], 0)
-            await segment(4, b'ef')
-            await segment(4, b'ef')
-            self.assertEqual(self.activity.snapshot()['phases']['media'][category + '_downloads'], 1)
+        async def segment(start, payload):
+            stream = self.activity.track_stream(source(payload), 6 - start, 'file',
+                download=(start, 6, b'manager'))
+            await anext(stream)
+            await stream.aclose()
+        await segment(0, b'ab')
+        await segment(2, b'cd')
+        await segment(0, b'ab')  # Retry overlaps, not a new file.
+        self.assertEqual(self.activity.snapshot()['phases']['media']['single_downloads'], 0)
+        await segment(4, b'ef')
+        await segment(4, b'ef')
+        self.assertEqual(self.activity.snapshot()['phases']['media']['single_downloads'], 1)
 
     async def test_missing_bytes_other_clients_and_playback_never_complete_a_download(self):
         async def source(data): yield data
         async def send(start, data, client=b'manager', playback=False):
             async for _ in self.activity.track_stream(source(data), len(data), 'file',
-                download=None if playback else ('single', start, 6, client)): pass
+                download=None if playback else (start, 6, client)): pass
         await send(0, b'ab')
         await send(3, b'def')
         await send(2, b'c', client=b'other-manager')
