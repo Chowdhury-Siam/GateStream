@@ -26,11 +26,11 @@ class ConfigurationRegressionTests(unittest.TestCase):
                 os.chdir(previous)
 
     def test_comment_examples_cannot_override_explicit_port_or_workers(self):
-        cfg = self.load({'.env': f'# PORT=7860\n# MULTI_BOT_TOKENS="{TOKEN_A}"\n\nBIND_ADDRESS=127.0.0.1\nPORT=40978\nZIP_CACHE_MAX_MB=512\nMULTI_BOT_TOKENS=""\n',
+        cfg = self.load({'.env': f'# PORT=7860\n# MULTI_BOT_TOKENS="{TOKEN_A}"\n\nBIND_ADDRESS=127.0.0.1\nPORT=40978\nMEDIA_CACHE_MAX_MB=512\nMULTI_BOT_TOKENS=""\n',
                          'start.sh': '#!/bin/sh\n# PORT=9999\nexport PORT=7860\npython -m bot\n'})
         cfg['validate_config']()
         self.assertEqual((cfg['Server'].BIND_ADDRESS, cfg['Server'].PORT), ('127.0.0.1', 40978))
-        self.assertEqual(cfg['Resources'].ZIP_CACHE_MAX_MB, 512)
+        self.assertEqual(cfg['Resources'].MEDIA_CACHE_MAX_MB, 512)
         self.assertEqual(cfg['Telegram'].MULTI_BOT_TOKENS, [])
 
     def test_environment_and_empty_alias_overrides_and_last_assignment(self):
@@ -70,7 +70,7 @@ class ConfigurationRegressionTests(unittest.TestCase):
             cfg['validate_config']()
 
     def test_invalid_values_are_sanitized_validation_errors(self):
-        for key, value in [('PORT','invalid-private-value'),('PORT','0'),('ZIP_CACHE_MAX_MB','-1'),
+        for key, value in [('PORT','invalid-private-value'),('PORT','0'),('MEDIA_CACHE_MAX_MB','-1'),
                            ('IO_WORKERS','0'),('BIND_ADDRESS','bad address'),('DATABASE_URL','private-value')]:
             cfg=self.load(environ={key:value})
             with self.assertRaises(ValueError) as caught:
@@ -93,9 +93,8 @@ class ConfigurationRegressionTests(unittest.TestCase):
         self.assertEqual(cfg['setting']('IGNORED'),'')
 
     def test_cache_disabled_and_default_database_names_preserved(self):
-        cfg=self.load(environ={'ZIP_CACHE_MAX_MB':'0','MEDIA_CACHE_MAX_MB':'0'})
+        cfg=self.load(environ={'MEDIA_CACHE_MAX_MB':'0'})
         cfg['validate_config']()
-        self.assertEqual(cfg['Resources'].ZIP_CACHE_MAX_MB,0)
         self.assertEqual(cfg['Resources'].MEDIA_CACHE_MAX_MB,0)
         self.assertEqual(cfg['Database'].DATABASE_NAME,'OmniArchiver')
         self.assertEqual(cfg['Database'].OMNI_MONGO_URI,'')
