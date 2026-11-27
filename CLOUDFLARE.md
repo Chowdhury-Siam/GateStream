@@ -109,9 +109,9 @@ without changing public URLs. For a new branded endpoint, optionally set
 `CLOUDFLARE_WORKER_NAME` to `gatestream-proxy`, deploy, then use the returned URL
 as your bot host’s `BASE_URL`.
 
-### Personal library forms and ZIP downloads
+### Personal library forms
 
 The Worker forwards GET and HEAD, plus POST forms for personal library
-sign-in, sign-out, folder renaming, shared ZIP preparation, and owner worker setup. It passes
-cookies, range headers, and streamed ZIP responses through to the origin.
+sign-in, sign-out and owner worker setup. It passes cookies, range headers
+and streamed file responses through to the origin.
 Deploy the Worker with the updated origin to apply the current route list.
