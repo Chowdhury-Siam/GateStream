@@ -16,10 +16,11 @@ from bot.modules.telegram import (
     iter_parallel_ranges, resolve_file_mime,
 )
 from bot.modules.static import get_human_size
-from bot.modules.memory import flush_ram, check_memory_circuit_breaker
 from bot.modules.activity import activity
 from bot.modules.lifecycle import spawn
-from bot.modules.cache import get_cached_chunk, put_cached_chunk, is_head_or_tail, init_cache, is_chunk_cached, prefetch_tail_chunk, prefetch_head_chunk
+from bot.modules.cache import (
+    get_cached_chunk, put_cached_chunk, is_head_or_tail, init_cache, is_chunk_cached, prefetch_tail_chunk,
+)
 
 try:
     from hydrogram.errors import FloodWait
@@ -98,7 +99,6 @@ async def transmit_file(file_code, range_allowed=True, parallel=False, internal=
     message_id = doc.get('message_id')
 
     # Lazy message resolution: Contact Telegram ONLY if metadata is missing or uncached chunks are needed!
-    worker = get_worker_client() or TelegramBot
     file_msg = None
 
     async def get_target_msg():
@@ -171,12 +171,10 @@ async def transmit_file(file_code, range_allowed=True, parallel=False, internal=
         curr_offset = offset
         curr_chunks_needed = chunks_needed
 
-        # Proactively trigger detached background pre-fetch of both Head and Tail if opening chunk 0
-        if offset == 0 and not internal:
-            if not is_chunk_cached(file_code, 0):
-                spawn(prefetch_head_chunk(file_code, total_chunks, target_msg=file_msg, channel_id=channel_id, message_id=message_id))
-            if total_chunks > 4 and not is_chunk_cached(file_code, total_chunks - 1):
-                spawn(prefetch_tail_chunk(file_code, total_chunks, target_msg=file_msg, channel_id=channel_id, message_id=message_id))
+        # Downloads fill the head/tail cache as they stream. Only playback
+        # benefits from fetching the tail out of order for its seek index.
+        if is_streaming and offset == 0 and total_chunks > 4 and not is_chunk_cached(file_code, total_chunks - 1):
+            spawn(prefetch_tail_chunk(file_code, total_chunks, channel_id, message_id))
 
         # 1. Fast Path: Serve any consecutive leading chunks from Head & Tail SSD cache (0.5ms response time)
         # Supports in-flight waiting if chunk is currently being pre-cached by a worker!
@@ -210,8 +208,6 @@ async def transmit_file(file_code, range_allowed=True, parallel=False, internal=
         if curr_chunks_needed <= 0 or bytes_streamed >= content_length:
             if bytes_streamed > 0 and not internal:
                 await add_bandwidth_bytes(bytes_streamed)
-            check_memory_circuit_breaker()
-            flush_ram()
             return
 
         # 2. Dual-Engine Streaming Architecture
@@ -293,15 +289,11 @@ async def transmit_file(file_code, range_allowed=True, parallel=False, internal=
                         yield chunk
                         bytes_streamed += len(chunk)
                         curr_offset += 1
-                        if curr_offset % 20 == 0:
-                            check_memory_circuit_breaker()
                         if bytes_streamed >= content_length:
                             break
             finally:
                 if bytes_streamed > 0 and not internal:
                     await add_bandwidth_bytes(bytes_streamed)
-                check_memory_circuit_breaker()
-                flush_ram()
 
         elif is_streaming and curr_chunks_needed > 1:
             # ZIP has one HTTP connection, so fetch its Telegram chunks concurrently
@@ -329,7 +321,8 @@ async def transmit_file(file_code, range_allowed=True, parallel=False, internal=
                         if not msg:
                             continue
 
-                        chunk = await asyncio.wait_for(get_media_chunk(worker, msg, target_idx), timeout=18.0)
+                        async with asyncio.timeout(18.0):
+                            chunk = await get_media_chunk(worker, msg, target_idx)
                         if chunk:
                             if is_head_or_tail(target_idx, total_chunks):
                                 spawn(put_cached_chunk(file_code, target_idx, chunk, total_chunks))
@@ -352,7 +345,8 @@ async def transmit_file(file_code, range_allowed=True, parallel=False, internal=
                 try:
                     fresh_msg = await get_message(channel_id, message_id, client=TelegramBot, force_refresh=True)
                     if fresh_msg:
-                        return await asyncio.wait_for(get_media_chunk(TelegramBot, fresh_msg, target_idx), timeout=18.0)
+                        async with asyncio.timeout(18.0):
+                            return await get_media_chunk(TelegramBot, fresh_msg, target_idx)
                 except Exception as fb_err:
                     logger.error("Final TelegramBot fallback failed on chunk %d: %s", target_idx, fb_err)
 
@@ -405,8 +399,6 @@ async def transmit_file(file_code, range_allowed=True, parallel=False, internal=
                     del chunk
                     curr_offset += 1
 
-                    if curr_offset % 20 == 0:
-                        check_memory_circuit_breaker()
 
             except (asyncio.CancelledError, GeneratorExit):
                 pass
@@ -419,8 +411,6 @@ async def transmit_file(file_code, range_allowed=True, parallel=False, internal=
                 pending_tasks.clear()
                 if bytes_streamed > 0 and not internal:
                     await add_bandwidth_bytes(bytes_streamed)
-                check_memory_circuit_breaker()
-                flush_ram()
 
         else:
             # Mode B: Continuous stream for downloads and ZIP sources, with stall recovery.
@@ -472,8 +462,6 @@ async def transmit_file(file_code, range_allowed=True, parallel=False, internal=
                                 curr_offset += 1
                                 retry_count = 0
 
-                                if curr_offset % 20 == 0:
-                                    check_memory_circuit_breaker()
 
                         if bytes_streamed < content_length:
                             raise IOError("Telegram stream ended before the requested bytes arrived")
@@ -498,8 +486,6 @@ async def transmit_file(file_code, range_allowed=True, parallel=False, internal=
             finally:
                 if bytes_streamed > 0 and not internal:
                     await add_bandwidth_bytes(bytes_streamed)
-                check_memory_circuit_breaker()
-                flush_ram()
 
     if not internal and request.method == 'HEAD':
         response = Response(status=status_code)
