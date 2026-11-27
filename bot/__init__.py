@@ -9,7 +9,7 @@ validate_config()
 os.environ['MOTOR_MAX_WORKERS'] = str(Resources.MOTOR_MAX_WORKERS)
 dictConfig(LOGGER_CONFIG_JSON)
 
-version = "2.0.33"
+version = "2.0.34"
 logger = getLogger('bot')
 
 # Keep legacy imports available without constructing clients before asyncio.run.
