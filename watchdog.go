@@ -10,9 +10,8 @@ import (
 )
 
 func projectLock() (*os.File, bool, error) {
-	if len(os.Args) < 2 || os.Args[1] != "--watchdog" {
-		return nil, true, nil
-	}
+	// Every entry point shares the lock, including foreground and Cron starts.
+	// --watchdog remains accepted for compatibility with existing Cron entries.
 	var lock *os.File
 	if value := os.Getenv("GATESTREAM_LOCK_FD"); value != "" {
 		fd, err := strconv.ParseUint(value, 10, 32)
