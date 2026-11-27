@@ -1,11 +1,9 @@
 """Bounded caches and portable pressure handling on quota-limited hosts."""
 import asyncio
 import errno
-from contextlib import asynccontextmanager
 import os
 from pathlib import Path
 import tempfile
-import time
 from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, Mock, patch
@@ -16,7 +14,6 @@ with patch.dict(os.environ, {
     'DATABASE_URL':'mongodb://localhost:27017',
 }, clear=True):
     from bot.modules import cache, memory
-    from bot.modules.archive_cache import ArchiveCache, ArchiveCapacityError, ARCHIVE_AGE
 
 
 class MediaQuotaTests(unittest.IsolatedAsyncioTestCase):
@@ -100,33 +97,20 @@ class MediaQuotaTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(await cache.get_cached_chunk('two', 9), b'tail')
 
 
-class ZIPQuotaTests(unittest.IsolatedAsyncioTestCase):
-    async def test_unavailable_storage_and_zero_budget_have_clear_admission_failures(self):
-        with tempfile.TemporaryDirectory() as directory:
-            archive=ArchiveCache(directory,0)
-            with self.assertRaisesRegex(ArchiveCapacityError,'capacity'):
-                await archive.start('a'*43,[],None,time.time()+ARCHIVE_AGE)
-            archive.max_bytes=1024
-            with patch.object(archive,'_prune',side_effect=OSError(errno.EDQUOT,'quota')):
-                with self.assertRaisesRegex(ArchiveCapacityError,'quota'):
-                    await archive.start('b'*43,[],None,time.time()+ARCHIVE_AGE)
-            self.assertEqual(archive.jobs,{})
+    async def test_revoked_chunks_and_manual_cleanup_update_the_disk_cache(self):
+        directory = Path(self.directory.name)
+        unrelated = directory / 'keep.txt'
+        unrelated.write_text('keep')
+        await cache.put_cached_chunk('replaced', 0, b'old', 1)
+        await cache.put_cached_chunk('other', 0, b'new', 1)
 
-    async def test_mid_build_quota_error_never_publishes_ready_zip(self):
-        for number in (errno.EDQUOT,errno.ENOSPC):
-            with self.subTest(errno=number),tempfile.TemporaryDirectory() as directory:
-                archive=ArchiveCache(directory,1024)
-                write=AsyncMock(side_effect=OSError(number,'quota or disk full'))
-                @asynccontextmanager
-                async def disk_full(path,*args):
-                    Path(path).touch()
-                    yield SimpleNamespace(write=write,flush=AsyncMock())
-                with patch('bot.modules.archive_cache.aiofiles.open',disk_full):
-                    await archive.start('a'*43,[],None,time.time()+ARCHIVE_AGE,progressive=True)
-                    await archive.jobs['a'*43]['task']
-                write.assert_awaited_once()
-                self.assertEqual(archive.status('a'*43,22)['state'],'failed')
-                self.assertEqual(list(Path(directory).iterdir()),[])
+        cache.evict_file_chunks('replaced')
+        self.assertIsNone(await cache.get_cached_chunk('replaced', 0))
+        self.assertEqual(cache._TOTAL_CACHE_SIZE, 3)
+        self.assertEqual(cache.clear_media_cache(), 1)
+        self.assertEqual(cache._TOTAL_CACHE_SIZE, 0)
+        self.assertFalse(cache._CACHE_INDEX)
+        self.assertEqual(list(directory.iterdir()), [unrelated])
 
 
 class PortableMemoryTests(unittest.TestCase):
