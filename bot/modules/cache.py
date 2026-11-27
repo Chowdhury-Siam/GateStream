@@ -35,7 +35,11 @@ _IN_FLIGHT_CHUNKS: dict[tuple[str, int], asyncio.Event] = {}
 
 def is_chunk_cached(file_code: str, chunk_idx: int) -> bool:
     """Fast in-memory check whether a chunk is already cached on local SSD."""
-    return MAX_CACHE_BYTES > 0 and (file_code, chunk_idx) in _CACHE_INDEX
+    if MAX_CACHE_BYTES <= 0:
+        return False
+    if not _INITIALIZED:
+        init_cache()
+    return (file_code, chunk_idx) in _CACHE_INDEX
 
 async def prefetch_tail_chunk(file_code: str, total_chunks: int, channel_id, message_id):
     """Use at most one speculative Telegram read for playback seeking."""
@@ -125,8 +129,9 @@ async def get_cached_chunk(file_code: str, chunk_idx: int, wait_in_flight: bool 
     # If chunk is currently being downloaded in background, await its completion!
     if in_flight_evt is not None:
         try:
-            await asyncio.wait_for(in_flight_evt.wait(), timeout=4.0)
-        except (asyncio.TimeoutError, Exception):
+            async with asyncio.timeout(4.0):
+                await in_flight_evt.wait()
+        except TimeoutError:
             pass
         async with _CACHE_LOCK:
             has_chunk = key in _CACHE_INDEX
@@ -201,3 +206,45 @@ async def put_cached_chunk(file_code: str, chunk_idx: int, data: bytes, total_ch
             _TOTAL_CACHE_SIZE += len(data) - old
         except OSError as error:
             logger.warning('Media cache write skipped (%s); check disk quota and permissions.', type(error).__name__)
+
+def evict_file_chunks(file_code):
+    """Discard cached data when its file link is replaced or revoked."""
+    if not re.fullmatch(r'[A-Za-z0-9_-]+', file_code):
+        return
+    if not _INITIALIZED:
+        if not os.path.isdir(CACHE_DIR):
+            return
+        init_cache()
+    for key in list(_CACHE_INDEX):
+        if key[0] == file_code:
+            _remove_chunk(key)
+
+
+def _remove_chunk(key):
+    global _TOTAL_CACHE_SIZE
+    try:
+        os.unlink(os.path.join(CACHE_DIR, f'{key[0]}_{key[1]}.chunk'))
+        removed = 1
+    except FileNotFoundError:
+        removed = 0
+    except OSError as error:
+        logger.warning('Could not remove a cached chunk (%s).', type(error).__name__)
+        return 0
+    _TOTAL_CACHE_SIZE -= _CACHE_INDEX.pop(key, 0)
+    return removed
+
+
+def clear_media_cache():
+    """Remove only GateStream chunk files from the configured media cache."""
+    if not os.path.isdir(CACHE_DIR):
+        return 0
+    removed = 0
+    try:
+        with os.scandir(CACHE_DIR) as entries:
+            for entry in entries:
+                chunk = re.fullmatch(r'([A-Za-z0-9_-]+)_([0-9]+)\.chunk', entry.name)
+                if chunk and entry.is_file(follow_symlinks=False):
+                    removed += _remove_chunk((chunk[1], int(chunk[2])))
+    except OSError as error:
+        logger.warning('Could not scan the media cache (%s).', type(error).__name__)
+    return removed
