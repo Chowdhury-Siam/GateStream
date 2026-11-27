@@ -3,7 +3,6 @@ import asyncio
 import math
 import time
 
-from cryptography.exceptions import InvalidTag
 from hydrogram import Client, raw
 from hydrogram.enums import ChatMemberStatus, ChatType
 from hydrogram.errors import (
@@ -129,6 +128,8 @@ async def _add_bot(client, channel, worker):
 
 
 async def repair_channel(channel_id, report):
+    from cryptography.exceptions import InvalidTag
+
     state = db.db['worker_repair']
     key = {'_id': Telegram.OWNER_ID}
     checkpoint = await state.find_one(key) or {}
