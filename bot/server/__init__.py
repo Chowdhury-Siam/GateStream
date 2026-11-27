@@ -1,14 +1,11 @@
 from contextlib import contextmanager
 from quart import Quart
 from uvicorn import Server as UvicornServer, Config
-from logging import getLogger
 from bot.config import Server
-from . import main, error, catalog, personal_library
+from . import main, error, personal_library
 from bot.modules.activity_store import activity_store
-from bot.modules.archive_cache import archive_cache
 from bot.modules.worker_setup import setup as worker_setup
 
-logger = getLogger('uvicorn')
 instance = Quart(__name__)
 instance.config['RESPONSE_TIMEOUT'] = None
 instance.config['BODY_TIMEOUT'] = 300
@@ -23,12 +20,10 @@ async def before_serve():
 @instance.after_serving
 async def after_serve():
     await worker_setup.close()
-    await archive_cache.close()
     await activity_store.flush()
 
 
 instance.register_blueprint(main.bp)
-instance.register_blueprint(catalog.bp)
 instance.register_blueprint(personal_library.bp)
 
 instance.register_error_handler(400, error.invalid_request)
