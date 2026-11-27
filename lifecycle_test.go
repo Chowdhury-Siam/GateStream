@@ -99,11 +99,24 @@ func TestCacheAccountsForLegacyChunks(t *testing.T) {
 		t.Fatal("old cache was not evicted to make space")
 	}
 }
+func testExecutable(t *testing.T) string {
+	t.Helper()
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	executable, err = filepath.Abs(executable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return executable
+}
+
 func TestWatchdogHelper(t *testing.T) {
 	if os.Getenv("GATESTREAM_TEST_LOCK_HELPER") == "" {
 		return
 	}
-	originalExecutable := os.Args[0]
+	originalExecutable := testExecutable(t)
 	os.Args = []string{originalExecutable}
 	if os.Getenv("GATESTREAM_TEST_LOCK_HELPER") == "legacy" {
 		os.Args = append(os.Args, "--watchdog")
@@ -136,12 +149,13 @@ func TestWatchdogHelper(t *testing.T) {
 }
 
 func TestLockRecoveryAfterSignalsAndCrash(t *testing.T) {
+	executable := testExecutable(t)
 	t.Chdir(t.TempDir())
 	for _, stopSignal := range []syscall.Signal{syscall.SIGINT, syscall.SIGTERM, syscall.SIGKILL} {
 		t.Run(stopSignal.String(), func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
-			child := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestWatchdogHelper$")
+			child := exec.CommandContext(ctx, executable, "-test.run=^TestWatchdogHelper$")
 			child.Env = append(os.Environ(), "GATESTREAM_TEST_LOCK_HELPER=wait", "GATESTREAM_LOCK_FD=")
 			stdout, err := child.StdoutPipe()
 			if err != nil {
@@ -155,7 +169,7 @@ func TestLockRecoveryAfterSignalsAndCrash(t *testing.T) {
 			if !line.Scan() || !strings.HasPrefix(line.Text(), "ACQUIRED ") {
 				t.Fatal("child did not hold lock", line.Text())
 			}
-			duplicate := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestWatchdogHelper$")
+			duplicate := exec.CommandContext(ctx, executable, "-test.run=^TestWatchdogHelper$")
 			duplicate.Env = append(os.Environ(), "GATESTREAM_TEST_LOCK_HELPER=legacy", "GATESTREAM_LOCK_FD=")
 			if output, err := duplicate.CombinedOutput(); err != nil || !strings.Contains(string(output), "BUSY") {
 				t.Fatal("Cron duplicate not rejected", string(output), err)
@@ -167,7 +181,7 @@ func TestLockRecoveryAfterSignalsAndCrash(t *testing.T) {
 			if stopSignal != syscall.SIGKILL && err != nil {
 				t.Fatal("unclean signal exit", err)
 			}
-			next := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestWatchdogHelper$")
+			next := exec.CommandContext(ctx, executable, "-test.run=^TestWatchdogHelper$")
 			next.Env = append(os.Environ(), "GATESTREAM_TEST_LOCK_HELPER=check", "GATESTREAM_LOCK_FD=")
 			if output, err := next.CombinedOutput(); err != nil || !strings.Contains(string(output), "ACQUIRED ") {
 				t.Fatal("next Cron invocation could not recover", string(output), err)
@@ -183,6 +197,7 @@ func TestDeploymentLaunchers(t *testing.T) {
 	}
 }
 func TestWatchdogDuplicatePreventionAndExecRestart(t *testing.T) {
+	executable := testExecutable(t)
 	t.Chdir(t.TempDir())
 	t.Setenv("GATESTREAM_LOCK_FD", "")
 	originalArgs := os.Args
@@ -192,14 +207,14 @@ func TestWatchdogDuplicatePreventionAndExecRestart(t *testing.T) {
 	if err != nil || !acquired {
 		t.Fatal(acquired, err)
 	}
-	child := exec.Command(originalArgs[0], "-test.run=^TestWatchdogHelper$")
+	child := exec.Command(executable, "-test.run=^TestWatchdogHelper$")
 	child.Env = append(os.Environ(), "GATESTREAM_TEST_LOCK_HELPER=check", "GATESTREAM_LOCK_FD=")
 	output, err := child.CombinedOutput()
 	if err != nil || !strings.Contains(string(output), "BUSY") {
 		t.Fatal(string(output), err)
 	}
 	_ = lock.Close()
-	child = exec.Command(originalArgs[0], "-test.run=^TestWatchdogHelper$")
+	child = exec.Command(executable, "-test.run=^TestWatchdogHelper$")
 	child.Env = append(os.Environ(), "GATESTREAM_TEST_LOCK_HELPER=restart", "GATESTREAM_LOCK_FD=")
 	output, err = child.CombinedOutput()
 	if err != nil {
