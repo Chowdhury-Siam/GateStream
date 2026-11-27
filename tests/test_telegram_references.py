@@ -36,7 +36,7 @@ class TelegramReferenceTests(unittest.IsolatedAsyncioTestCase):
             primary.assert_not_awaited()
         self.assertEqual(result, chunks)
         self.assertEqual(calls, [(self.old, 0, 4), (self.fresh, 2, 2)])
-        self.worker.get_messages.assert_awaited_once_with(chat_id=-100123, message_ids=42)
+        self.worker.get_messages.assert_awaited_once_with(chat_id=-100123, message_ids=42, replies=0)
         self.assertEqual(slots._value, 1)
 
     async def test_explicit_expired_error_and_single_chunk_reader_use_same_recovery(self):
