@@ -1,5 +1,16 @@
 # Changelog
 
+## v2.0.34
+
+- Check RSS every five seconds in one application task instead of forcing a full
+  garbage collection when each HTTP range finishes. Keep memory pressure cleanup
+  and cooperative restarts at the configured thresholds.
+- Read a download's first chunk through its normal data path and fill the disk
+  cache with bytes already being streamed. Keep one speculative tail read at a
+  time for browser playback.
+- Apply Telegram read deadlines in the existing task on Python 3.11. Keep
+  range ordering, timeout recovery, and byte-accurate resume.
+
 ## 2.0.33 — 2026-11-26
 
 This full GitHub distribution combines the v2.0.33 configuration, lifecycle and
