@@ -1,4 +1,5 @@
 """Portable memory accounting and cooperative pressure recovery."""
+import asyncio
 import ctypes
 import gc
 import os
@@ -65,3 +66,14 @@ def check_memory_circuit_breaker(clean_threshold_mb=None, restart_threshold_mb=N
         if request_restart():
             logger.warning('Memory limit reached; requesting a graceful restart.')
     return True
+
+
+async def monitor_memory(stop):
+    """Watch process memory independently of transfer volume and worker health."""
+    while not stop.is_set():
+        check_memory_circuit_breaker()
+        try:
+            async with asyncio.timeout(5):
+                await stop.wait()
+        except TimeoutError:
+            pass
