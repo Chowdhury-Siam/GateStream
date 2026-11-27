@@ -6,7 +6,6 @@ from hydrogram import enums, filters
 from hydrogram.errors import FloodWait
 from hydrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 
-from bot.clients import TelegramBot
 from bot.config import Telegram, Server
 from bot.database.files import get_group_upload, save_file
 from bot.modules import personal_library as library
@@ -43,7 +42,6 @@ async def save_upload(msg, *, reply_to=None):
     response = reply_to if reply_to is not None else msg
     topic = forum_topic(msg)
     chat_id = topic['chat_id'] if topic else None
-    topic_id = topic['topic_id'] if topic else None
     source_key = f'{chat_id}:{msg.id}' if topic else None
     document = getattr(msg, 'document', None)
     private_name = (getattr(document, 'file_name', '') or '').lower()
@@ -72,12 +70,7 @@ async def save_upload(msg, *, reply_to=None):
                 file_name, file_size, mime_type = doc['file_name'], doc['file_size'], doc['mime_type']
                 duration, duration_formatted = doc.get('duration', 0), doc.get('duration_formatted', '')
             else:
-                folder = await library.active_folder(user_id, chat_id, topic_id=topic_id)
-                folder_id = folder['_id'] if folder else None
-                if folder_id and await library.folder_count(user_id, folder_id) >= library.MAX_FOLDER_FILES:
-                    return await response.reply('This index is full. Send /index to finish it before uploading more files.', quote=True)
-                if not folder_id:
-                    status_msg = await response.reply('Saving your file…', quote=True)
+                status_msg = await response.reply('Saving your file…', quote=True)
                 try:
                     forwarded = await msg.copy(chat_id=Telegram.CHANNEL_ID)
                 except FloodWait as error:
@@ -91,9 +84,7 @@ async def save_upload(msg, *, reply_to=None):
                 doc = await save_file(channel_id=Telegram.CHANNEL_ID, message_id=forwarded.id,
                     file_name=file_name, file_size=file_size, mime_type=mime_type, user_id=user_id,
                     category='direct_files', duration=duration, duration_formatted=duration_formatted,
-                    personal=True, personal_index_id=folder_id, source_key=source_key)
-                if folder_id and reply_to is None:
-                    return
+                    personal=True, source_key=source_key)
 
         code = doc['code']
         human_size = get_human_size(file_size)
