@@ -2,6 +2,7 @@ import asyncio
 import hashlib
 from contextlib import aclosing
 from logging import getLogger
+from hydrogram.errors import FloodWait
 from quart import Blueprint, Response, request, render_template, jsonify
 from bot import version
 from math import ceil
@@ -10,30 +11,21 @@ from .error import abort
 from bot.clients import get_worker_client, TelegramBot, mark_worker_cooldown, worker_clients
 from bot.config import Telegram, Server
 from bot.database import db
-from bot.database.files import get_file, add_bandwidth_bytes
+from bot.database.files import get_file
 from bot.modules.telegram import (
     get_message, get_file_properties, get_media_chunk, iter_media_chunks,
-    iter_parallel_ranges, resolve_file_mime,
+    resolve_file_mime,
 )
 from bot.modules.static import get_human_size
 from bot.modules.activity import activity
 from bot.modules.lifecycle import spawn
 from bot.modules.cache import (
-    get_cached_chunk, put_cached_chunk, is_head_or_tail, init_cache, is_chunk_cached, prefetch_tail_chunk,
+    get_cached_chunk, put_cached_chunk, is_head_or_tail, is_chunk_cached, prefetch_tail_chunk,
 )
-
-try:
-    from hydrogram.errors import FloodWait
-except ImportError:
-    try:
-        from pyrogram.errors import FloodWait
-    except ImportError:
-        FloodWait = Exception
 
 logger = getLogger('server')
 
 bp = Blueprint('main', __name__)
-init_cache()
 
 @bp.route('/')
 async def home():
@@ -89,7 +81,7 @@ def download_client():
 
 
 @bp.route('/dl/<string:file_code>')
-async def transmit_file(file_code, range_allowed=True, parallel=False, internal=False):
+async def transmit_file(file_code):
     # Lookup file record in MongoDB
     doc = await get_file(file_code)
     if not doc:
@@ -122,7 +114,7 @@ async def transmit_file(file_code, range_allowed=True, parallel=False, internal=
         file_size = file_size or f_size
         mime_type = mime_type or m_type
 
-    range_header = request.headers.get('Range') if range_allowed and not internal else None
+    range_header = request.headers.get('Range')
     start = 0
     end = file_size - 1
     chunk_size = 1024 * 1024  # 1 MB
@@ -143,7 +135,7 @@ async def transmit_file(file_code, range_allowed=True, parallel=False, internal=
 
     # The player uses ?stream=1 or ?inline=1. Other file types are attachments
     # so a guessed type such as text/html cannot render on the origin.
-    is_streaming = False if internal else (request.args.get('stream') or request.args.get('inline')) and not (request.args.get('dl') or request.args.get('download'))
+    is_streaming = (request.args.get('stream') or request.args.get('inline')) and not (request.args.get('dl') or request.args.get('download'))
     disposition = 'inline' if is_streaming and mime_type.startswith(('video/', 'audio/')) else 'attachment'
 
     headers = {
@@ -206,98 +198,11 @@ async def transmit_file(file_code, range_allowed=True, parallel=False, internal=
 
         # If all requested data was served directly from cache (0ms delay), we are done without touching Telegram!
         if curr_chunks_needed <= 0 or bytes_streamed >= content_length:
-            if bytes_streamed > 0 and not internal:
-                await add_bandwidth_bytes(bytes_streamed)
             return
 
-        # 2. Dual-Engine Streaming Architecture
-        # -------------------------------------------------------------------------
-        # Mode A: Multi-Worker Concurrent Chunk Pipeliner
-        # Video playback uses chunk reads; ZIP sources use continuous 4 MiB ranges.
-        # Keeps a bounded window of up to four chunk reads across the worker pool.
-        # Overlaps Telegram request latency while emitting chunks in their original order.
-        #
-        # Mode B: Resilient Sequential Continuous Stream
-        # Dedicated healthy worker streaming directly from MTProto.
-        # Ideal for multi-connection download managers (ABDM, IDM) where 8-16 connections
-        # each receive their own dedicated worker without multiplying task overhead.
-        # -------------------------------------------------------------------------
         end_chunk = curr_offset + curr_chunks_needed
-
-        if parallel and curr_chunks_needed > 1:
-            warmed = set()
-            warm_locks = {}
-
-            async def range_stream(client, msg, first, count):
-                name = getattr(client, 'name', 'bot')
-                async with aclosing(iter_media_chunks(client, msg, first, count)) as stream:
-                    initial = None
-                    if name not in warmed:
-                        lock = getattr(client, 'media_sessions_lock', None) or warm_locks.setdefault(name, asyncio.Lock())
-                        async with lock:
-                            if name not in warmed:
-                                # Hydrogram publishes its media session before start/auth
-                                # finishes. Wait for one real chunk before concurrent reads.
-                                initial = await anext(stream, None)
-                                if initial is not None:
-                                    warmed.add(name)
-                    if initial is not None:
-                        yield initial
-                    async for chunk in stream:
-                        yield chunk
-
-            async def read_span(first, count):
-                received = retries = 0
-                while received < count and retries < 12:
-                    client = get_worker_client() or TelegramBot
-                    name = getattr(client, 'name', 'bot')
-                    try:
-                        msg = await get_message(channel_id, message_id, client=client, force_refresh=retries > 0, allow_fallback=False)
-                        if not msg:
-                            raise IOError('Telegram message unavailable')
-                        async with aclosing(range_stream(client, msg, first + received, count - received)) as stream:
-                            async for chunk in stream:
-                                expected = min(chunk_size, file_size - (first + received) * chunk_size)
-                                if len(chunk) != expected:
-                                    raise IOError('Telegram chunk was incomplete')
-                                received += 1
-                                retries = 0
-                                yield chunk
-                        if received < count:
-                            raise IOError('Telegram range ended early')
-                    except (asyncio.CancelledError, GeneratorExit):
-                        raise
-                    except Exception as error:
-                        retries += 1
-                        cooldown = getattr(error, 'value', 30) if isinstance(error, FloodWait) else 15
-                        if type(error).__name__ in ('ChannelPrivate', 'ChatAdminRequired', 'UserNotParticipant'):
-                            cooldown = 600
-                        mark_worker_cooldown(name, cooldown)
-                        logger.warning('ZIP source range stalled at chunk %d (%s), retry %d/12.', first + received, type(error).__name__, retries)
-                        await asyncio.sleep(.5)
-                if received < count:
-                    raise IOError('Telegram range could not be completed')
-
-            try:
-                async with aclosing(iter_parallel_ranges(read_span, curr_offset, curr_chunks_needed)) as source:
-                    async for chunk in source:
-                        if is_head_or_tail(curr_offset, total_chunks):
-                            spawn(put_cached_chunk(file_code, curr_offset, chunk, total_chunks))
-                        if bytes_streamed == 0:
-                            chunk = chunk[current_start % chunk_size:]
-                        chunk = chunk[:content_length - bytes_streamed]
-                        yield chunk
-                        bytes_streamed += len(chunk)
-                        curr_offset += 1
-                        if bytes_streamed >= content_length:
-                            break
-            finally:
-                if bytes_streamed > 0 and not internal:
-                    await add_bandwidth_bytes(bytes_streamed)
-
-        elif is_streaming and curr_chunks_needed > 1:
-            # ZIP has one HTTP connection, so fetch its Telegram chunks concurrently
-            # even when the primary bot is the only configured client.
+        if is_streaming and curr_chunks_needed > 1:
+            # Keep a bounded read-ahead window for browser playback.
             PREFETCH_CONCURRENCY = min(4, max(1, len(worker_clients)))
             pending_tasks: dict[int, asyncio.Task] = {}
             next_to_schedule = curr_offset
@@ -398,10 +303,6 @@ async def transmit_file(file_code, range_allowed=True, parallel=False, internal=
                     bytes_streamed += len(chunk)
                     del chunk
                     curr_offset += 1
-
-
-            except (asyncio.CancelledError, GeneratorExit):
-                pass
             finally:
                 for t in pending_tasks.values():
                     if not t.done():
@@ -409,91 +310,82 @@ async def transmit_file(file_code, range_allowed=True, parallel=False, internal=
                 if pending_tasks:
                     await asyncio.gather(*pending_tasks.values(), return_exceptions=True)
                 pending_tasks.clear()
-                if bytes_streamed > 0 and not internal:
-                    await add_bandwidth_bytes(bytes_streamed)
 
         else:
-            # Mode B: Continuous stream for downloads and ZIP sources, with stall recovery.
+            # Keep a continuous Telegram stream per download connection.
             retry_count = 0
             MAX_RETRIES = 12
 
-            try:
-                while curr_offset < end_chunk and bytes_streamed < content_length and retry_count < MAX_RETRIES:
-                    worker_client = get_worker_client() or TelegramBot
-                    worker_name = getattr(worker_client, 'name', 'bot')
+            while curr_offset < end_chunk and bytes_streamed < content_length and retry_count < MAX_RETRIES:
+                worker_client = get_worker_client() or TelegramBot
+                worker_name = getattr(worker_client, 'name', 'bot')
 
-                    try:
-                        msg = await get_message(channel_id, message_id, client=worker_client, force_refresh=retry_count > 0, allow_fallback=False)
-                        if not msg and worker_client != TelegramBot:
-                            worker_client = TelegramBot
-                            worker_name = 'TelegramBot'
-                            msg = await get_message(channel_id, message_id, client=TelegramBot)
-                        if not msg:
-                            logger.warning("Could not retrieve message for %s at chunk %d", file_code, curr_offset)
-                            break
-                    except Exception as msg_err:
-                        logger.warning("Error fetching message for worker %s: %s", worker_name, msg_err)
+                try:
+                    msg = await get_message(channel_id, message_id, client=worker_client, force_refresh=retry_count > 0, allow_fallback=False)
+                    if not msg and worker_client != TelegramBot:
+                        worker_client = TelegramBot
+                        worker_name = 'TelegramBot'
+                        msg = await get_message(channel_id, message_id, client=TelegramBot)
+                    if not msg:
+                        logger.warning("Could not retrieve message for %s at chunk %d", file_code, curr_offset)
+                        break
+                except Exception as msg_err:
+                    logger.warning("Error fetching message for worker %s: %s", worker_name, msg_err)
+                    mark_worker_cooldown(worker_name, 15)
+                    retry_count += 1
+                    await asyncio.sleep(0.5)
+                    continue
+
+                try:
+                    async with aclosing(iter_media_chunks(worker_client, msg, curr_offset, end_chunk - curr_offset)) as stream:
+                        async for chunk in stream:
+                            if is_head_or_tail(curr_offset, total_chunks):
+                                spawn(put_cached_chunk(file_code, curr_offset, chunk, total_chunks))
+
+                            if bytes_streamed == 0:
+                                trim_start = current_start % chunk_size
+                                if trim_start > 0:
+                                    chunk = chunk[trim_start:]
+
+                            rem_bytes = content_length - bytes_streamed
+                            if rem_bytes <= 0:
+                                return
+
+                            if len(chunk) > rem_bytes:
+                                chunk = chunk[:rem_bytes]
+
+                            yield chunk
+                            bytes_streamed += len(chunk)
+                            del chunk
+                            curr_offset += 1
+                            retry_count = 0
+
+                    if bytes_streamed < content_length:
+                        raise IOError("Telegram stream ended before the requested bytes arrived")
+                except (asyncio.CancelledError, GeneratorExit):
+                    raise
+                except Exception as stream_err:
+                    retry_count += 1
+                    err_name = type(stream_err).__name__
+                    logger.warning("Stream worker %s encountered %s at chunk %d (retry %d/%d). Rotating worker...",
+                                   worker_name, err_name, curr_offset, retry_count, MAX_RETRIES)
+                    if any(x in err_name for x in ("ChannelPrivate", "ChatAdminRequired", "UserNotParticipant")):
+                        mark_worker_cooldown(worker_name, 600)
+                    elif isinstance(stream_err, FloodWait):
+                        wait_sec = getattr(stream_err, 'value', 30)
+                        mark_worker_cooldown(worker_name, wait_sec)
+                    else:
                         mark_worker_cooldown(worker_name, 15)
-                        retry_count += 1
-                        await asyncio.sleep(0.5)
-                        continue
-
-                    try:
-                        async with aclosing(iter_media_chunks(worker_client, msg, curr_offset, end_chunk - curr_offset)) as stream:
-                            async for chunk in stream:
-                                if is_head_or_tail(curr_offset, total_chunks):
-                                    spawn(put_cached_chunk(file_code, curr_offset, chunk, total_chunks))
-
-                                if bytes_streamed == 0:
-                                    trim_start = current_start % chunk_size
-                                    if trim_start > 0:
-                                        chunk = chunk[trim_start:]
-
-                                rem_bytes = content_length - bytes_streamed
-                                if rem_bytes <= 0:
-                                    return
-
-                                if len(chunk) > rem_bytes:
-                                    chunk = chunk[:rem_bytes]
-
-                                yield chunk
-                                bytes_streamed += len(chunk)
-                                del chunk
-                                curr_offset += 1
-                                retry_count = 0
+                    await asyncio.sleep(0.5)
 
 
-                        if bytes_streamed < content_length:
-                            raise IOError("Telegram stream ended before the requested bytes arrived")
-                    except (asyncio.CancelledError, GeneratorExit):
-                        raise
-                    except Exception as stream_err:
-                        retry_count += 1
-                        err_name = type(stream_err).__name__
-                        logger.warning("Stream worker %s encountered %s at chunk %d (retry %d/%d). Rotating worker...",
-                                       worker_name, err_name, curr_offset, retry_count, MAX_RETRIES)
-                        if any(x in err_name for x in ("ChannelPrivate", "ChatAdminRequired", "UserNotParticipant")):
-                            mark_worker_cooldown(worker_name, 600)
-                        elif isinstance(stream_err, FloodWait):
-                            wait_sec = getattr(stream_err, 'value', 30)
-                            mark_worker_cooldown(worker_name, wait_sec)
-                        else:
-                            mark_worker_cooldown(worker_name, 15)
-                        await asyncio.sleep(0.5)
-
-            except (asyncio.CancelledError, GeneratorExit):
-                pass
-            finally:
-                if bytes_streamed > 0 and not internal:
-                    await add_bandwidth_bytes(bytes_streamed)
-
-    if not internal and request.method == 'HEAD':
+    if request.method == 'HEAD':
         response = Response(status=status_code)
         response.automatically_set_content_length = False
         response.headers.update(headers)
         return response
-    body = file_stream() if internal else activity.track_stream(file_stream(), content_length, file_code,
-        download=None if is_streaming else ('single', start, file_size, download_client()))
+    body = activity.track_stream(file_stream(), content_length, file_code,
+        download=None if is_streaming else (start, file_size, download_client()))
     return Response(body, headers=headers, status=status_code)
 
 @bp.route('/stream/<string:file_code>')
