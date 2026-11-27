@@ -27,7 +27,6 @@ with patch.dict(os.environ, {
 class WorkerStartupTests(unittest.IsolatedAsyncioTestCase):
     async def test_invalid_worker_cannot_block_primary_or_valid_workers(self):
         from hydrogram.errors import AccessTokenInvalid
-        from bot.modules.activity_store import activity_store
         from bot.modules import bot_menu
         def worker(name):
             obj=Mock(name=name)
@@ -48,7 +47,7 @@ class WorkerStartupTests(unittest.IsolatedAsyncioTestCase):
         with patch.multiple(clients,TelegramBot=primary,Client=Mock(side_effect=[bad,good])), \
              patch.object(Telegram,'MULTI_BOT_TOKENS',['bad','good']),patch.object(Telegram,'BOT_USERNAME',Telegram.BOT_USERNAME), \
              patch.object(clients.db,'connect'),patch.object(clients.db,'db',SimpleNamespace(command=AsyncMock())), \
-             patch.object(clients.db,'create_indexes',AsyncMock()),patch.object(activity_store,'flush',AsyncMock()), \
+             patch.object(clients.db,'create_indexes',AsyncMock()), \
              patch.object(bot_menu,'register_commands',AsyncMock()):
             saved=clients.worker_clients[:]
             try:
@@ -62,6 +61,7 @@ class WorkerStartupTests(unittest.IsolatedAsyncioTestCase):
                 for _ in range(6):
                     self.assertIn(clients.get_worker_client(),[primary,good])
                 self.assertTrue(bad._gatestream_closed)
+                self.assertEqual(good.message_cache.capacity, 128)
             finally:
                 clients.worker_clients[:]=saved
                 clients._worker_cycler=None
@@ -85,6 +85,24 @@ class WorkerStartupTests(unittest.IsolatedAsyncioTestCase):
         client.executor.shutdown.assert_called_once_with(wait=True,cancel_futures=True)
 
 
+class DatabaseConnectionTests(unittest.TestCase):
+    def test_optional_catalog_client_is_lazy_and_pool_can_shrink_when_idle(self):
+        import bot.database as database
+
+        with patch.object(database.Database, 'OMNI_MONGO_URI', 'mongodb://catalog'), \
+             patch.object(database, 'AsyncIOMotorClient') as client:
+            instance = database.MongoDatabase()
+            instance.connect()
+            client.assert_called_once()
+            self.assertEqual(client.call_args.kwargs['minPoolSize'], 0)
+            self.assertEqual(client.call_args.kwargs['maxIdleTimeMS'], 60000)
+            self.assertIsNone(instance._omni_client)
+            self.assertIsNotNone(instance.omni_db)
+            self.assertIsNotNone(instance.omni_db)
+            self.assertEqual(client.call_count, 2)
+            instance.close()
+
+
 class ApplicationLifecycleTests(unittest.IsolatedAsyncioTestCase):
     async def asyncTearDown(self):
         await lifecycle.close()
@@ -93,14 +111,13 @@ class ApplicationLifecycleTests(unittest.IsolatedAsyncioTestCase):
     async def test_bind_failure_never_starts_telegram_and_closes_services(self):
         from bot.database import db
         from bot.modules.worker_setup import setup
-        from bot.modules.archive_cache import archive_cache
         from bot.modules.activity_store import activity_store
         with ExitStack() as stack:
             stack.enter_context(patch.object(runtime,'bind_listener',side_effect=RuntimeError('HTTP bind failed')))
             start=stack.enter_context(patch.object(clients,'start_all_clients',AsyncMock()))
             stop=stack.enter_context(patch.object(clients,'stop_all_clients',AsyncMock()))
             closed=stack.enter_context(patch.object(db,'close'))
-            for resource,name in ((setup,'close'),(archive_cache,'close'),(activity_store,'flush')):
+            for resource,name in ((setup,'close'),(activity_store,'flush')):
                 stack.enter_context(patch.object(resource,name,AsyncMock()))
             with self.assertRaisesRegex(RuntimeError,'HTTP bind failed'):
                 await runtime.main()
@@ -111,7 +128,6 @@ class ApplicationLifecycleTests(unittest.IsolatedAsyncioTestCase):
     async def test_failed_http_startup_never_reports_readiness_and_stops_clients(self):
         from bot.database import db
         from bot.modules.worker_setup import setup
-        from bot.modules.archive_cache import archive_cache
         from bot.modules.activity_store import activity_store
         failed=SimpleNamespace(started=False,should_exit=False,serve=AsyncMock())
         listener=Mock()
@@ -121,7 +137,7 @@ class ApplicationLifecycleTests(unittest.IsolatedAsyncioTestCase):
             start=stack.enter_context(patch.object(clients,'start_all_clients',AsyncMock()))
             stop=stack.enter_context(patch.object(clients,'stop_all_clients',AsyncMock()))
             closed=stack.enter_context(patch.object(db,'close'))
-            for resource,name in ((setup,'close'),(archive_cache,'close'),(activity_store,'flush')):
+            for resource,name in ((setup,'close'),(activity_store,'flush')):
                 stack.enter_context(patch.object(resource,name,AsyncMock()))
             with self.assertLogs('bot',level='INFO') as logs:
                 with self.assertRaisesRegex(RuntimeError,'HTTP startup failed'):
@@ -196,7 +212,8 @@ class PluginRegistrationTests(unittest.TestCase):
         self.assertEqual(len({id(call.args[0]) for call in add.call_args_list}),len(expected))
         self.assertNotIn('No plugin loaded',' '.join(logs.output))
         names={call.args[0].original_callback.__name__ for call in add.call_args_list}
-        self.assertTrue({'start_command','handle_user_file','index_command'} <= names,names)
+        self.assertTrue({'start_command','handle_user_file','catalog_command'} <= names,names)
+        self.assertNotIn('index_command', names)
 
 
 @unittest.skipUnless(os.name=='posix','POSIX signal integration')
@@ -265,3 +282,61 @@ raise SystemExit(result)
                     if process.poll() is None:
                         process.kill()
                         process.communicate()
+
+
+@unittest.skipUnless(os.name == 'posix', 'POSIX cron launcher')
+class WatchdogTests(unittest.TestCase):
+    def test_launcher_keeps_one_pid_and_holds_lock_across_restart(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            scripts = root / 'scripts'
+            scripts.mkdir()
+            bot = root / 'bot'
+            bot.mkdir()
+            (bot / '__init__.py').touch()
+            launcher = scripts / 'watchdog.py'
+            source = Path(__file__).resolve().parents[1] / 'scripts' / 'watchdog.py'
+            launcher.write_bytes(source.read_bytes())
+            (bot / '__main__.py').write_text("""
+import os
+from pathlib import Path
+import signal
+import sys
+checkpoint = Path('restart-pid')
+if not checkpoint.exists():
+    checkpoint.write_text(str(os.getpid()))
+    os.execv(sys.executable, [sys.executable, '-m', 'bot'])
+Path('pid.tmp').write_text(str(os.getpid()))
+Path('pid.tmp').replace('ready')
+signal.pause()
+""")
+            command = [sys.executable, str(launcher)]
+            process = subprocess.Popen(command)
+            try:
+                ready = root / 'ready'
+                deadline = time.monotonic() + 5
+                while not ready.exists() and process.poll() is None and time.monotonic() < deadline:
+                    time.sleep(.02)
+                self.assertTrue(ready.exists())
+                self.assertEqual(int(ready.read_text()), process.pid)
+                self.assertEqual(int((root / 'restart-pid').read_text()), process.pid)
+                self.assertEqual(subprocess.run(command, timeout=5).returncode, 0)
+                self.assertIsNone(process.poll())
+            finally:
+                if process.poll() is None:
+                    process.terminate()
+                process.wait(timeout=5)
+
+            # The lock is freed when the bot exits, so the next cron tick starts it.
+            ready.unlink()
+            replacement = subprocess.Popen(command)
+            try:
+                deadline = time.monotonic() + 5
+                while not ready.exists() and replacement.poll() is None and time.monotonic() < deadline:
+                    time.sleep(.02)
+                self.assertTrue(ready.exists())
+                self.assertEqual(int(ready.read_text()), replacement.pid)
+            finally:
+                if replacement.poll() is None:
+                    replacement.terminate()
+                replacement.wait(timeout=5)
