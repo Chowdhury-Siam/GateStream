@@ -46,7 +46,7 @@
 
     .activity-details { margin-top:16px; }
     summary { cursor:pointer; color:#c9c5b9; font-size:13px; padding:6px 0; }
-    .download-totals { display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:8px; }
+    .download-totals { display:grid; grid-template-columns:1fr; gap:12px; margin-bottom:8px; }
     .download-totals div { padding:16px; border:1px solid #494437; border-radius:10px; background:#171611; }
     .download-totals strong { display:block; font-size:30px; color:#d6ad60; font-variant-numeric:tabular-nums; }
     .download-totals span { font-size:12px; color:#c9c5b9; }
@@ -95,7 +95,7 @@
     <section class="hero" aria-labelledby="headline">
       <p class="eyebrow">Gateway to your media</p>
       <h1 id="headline">Your media <span>library.</span></h1>
-      <p class="intro">Browse your library, watch online, or download files together in a named ZIP.</p>
+      <p class="intro">Browse your library, watch online, or download a file.</p>
       <div class="actions">
         {% if bot_username %}
         <a class="primary" href="https://t.me/{{ bot_username }}" target="_blank" rel="noopener noreferrer">Open Telegram bot ↗</a>
@@ -110,9 +110,8 @@
       <div class="panel-heading"><h2 id="activity-title">Transfers</h2><span class="activity-status" id="activity-status" role="status">Connecting…</span></div>
       <div class="download-totals" aria-label="Download totals">
         <div><strong id="single-downloads">—</strong><span>Single files downloaded</span></div>
-        <div><strong id="zip-downloads">—</strong><span>ZIPs downloaded</span></div>
       </div>
-      <p class="activity-footnote">Completed downloads since this update. Range connections are combined; video playback is excluded.</p>
+      <p class="activity-footnote">Range connections count toward the same download. Playback is excluded.</p>
       <details class="activity-details"><summary>Bandwidth and connections</summary>
       <div class="metric-grid">
         <article class="metric-card"><span class="metric-label">MEDIA LINKS ACTIVE</span><strong class="metric-value" id="media-active">—</strong><span class="metric-note" id="media-connections">Waiting for activity data</span></article>
@@ -154,7 +153,6 @@
       function render(data) {
         const phases = data.phases;
         text('single-downloads', (phases.media.single_downloads || 0).toLocaleString());
-        text('zip-downloads', (phases.media.zip_downloads || 0).toLocaleString());
         text('media-active', data.active_media_links);
         text('media-connections', `${phases.media.active} active HTTP connection(s)`);
         text('media-bytes', bytes(phases.media.bytes));
@@ -191,7 +189,7 @@
         }
         if (!data.transfers.length || data.hidden_transfers) {
           const note = document.createElement('div'); note.className = 'empty-state';
-          note.textContent = data.hidden_transfers ? `${data.hidden_transfers} more transfer(s) are active; showing the latest 20.` : 'No active transfers. New file and ZIP downloads will appear here.';
+          note.textContent = data.hidden_transfers ? `${data.hidden_transfers} more transfer(s) are active; showing the latest 20.` : 'No active transfers. New downloads will appear here.';
           list.append(note);
         }
         byId('activity-panel').dataset.stale = 'false';
