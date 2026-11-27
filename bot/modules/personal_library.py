@@ -1,4 +1,4 @@
-"""User-owned Telegram uploads, persistent folder drafts, and browser sessions."""
+"""User-owned Telegram uploads and browser sessions."""
 import asyncio
 import hashlib
 import re
@@ -8,10 +8,8 @@ from weakref import WeakValueDictionary
 
 from bot.config import Server, Telegram
 from bot.database import db
-from bot.modules.archive import archive_filename
 from bot.modules.access import has_access
 
-MAX_FOLDER_FILES = 500
 LOGIN_AGE = 5 * 60
 SESSION_AGE = 8 * 60 * 60
 COOKIE = 'gatestream_library'
@@ -20,8 +18,7 @@ _locks = WeakValueDictionary()
 
 
 def user_lock(user_id):
-    # The Telegram update handlers share one process. Serialize a user's
-    # uploads with their /index commands without blocking other users.
+    # Serialize one user's uploads so duplicate group updates reuse their link.
     return _locks.setdefault(user_id, asyncio.Lock())
 
 
@@ -33,80 +30,15 @@ def uploads_filter():
     return {'$or': sources}
 
 
-def _folders():
-    return db.db['library_folders']
-
-
-async def active_folder(user_id, chat_id=None, *, topic_id=None):
-    return await _folders().find_one(
-        {'user_id': user_id, 'chat_id': chat_id, 'topic_id': topic_id, 'state': 'collecting'})
-
-
-def folder_name(value):
-    return archive_filename(value, 'Index').removesuffix('.zip')
-
-
-async def create_folder(user_id, name, chat_id=None, *, topic_id=None):
-    folder = dict(_id=secrets.token_urlsafe(32), user_id=user_id, state='collecting',
-                  name=name, created_at=datetime.now(timezone.utc))
-    if chat_id is not None:
-        folder['chat_id'] = chat_id
-    if topic_id is not None:
-        folder['topic_id'] = topic_id
-    await _folders().insert_one(folder)
-    return folder
-
-
-async def finish_folder(folder, name):
-    await _folders().update_one({'_id': folder['_id'], 'user_id': folder['user_id'], 'state': 'collecting'},
-        {'$set': {'state': 'ready', 'name': name, 'closed_at': datetime.now(timezone.utc)}})
-
-
-async def discard_empty_folder(folder):
-    await _folders().delete_one({'_id': folder['_id'], 'user_id': folder['user_id'], 'state': 'collecting'})
-
-
-async def folder_by_id(folder_id, user_id=None):
-    if not valid_token(folder_id):
-        return None
-    query = {'_id': folder_id, 'state': 'ready'}
-    if user_id is not None:
-        query['user_id'] = user_id
-    return await _folders().find_one(query)
-
-
-async def rename_folder(folder_id, user_id, name):
-    if not valid_token(folder_id):
-        return False
-    result = await _folders().update_one({'_id': folder_id, 'user_id': user_id, 'state': 'ready'},
-                                        {'$set': {'name': name}})
-    return bool(result.matched_count)
-
-
-def _file_query(user_id, folder_id):
-    return {'user_id': user_id, 'personal_index_id': folder_id, 'episodes': {'$exists': False}, **uploads_filter()}
-
-
-async def folder_count(user_id, folder_id):
-    return await db.direct_files.count_documents(_file_query(user_id, folder_id))
-
-
-async def folder_files(user_id, folder_id):
-    return await db.direct_files.find(_file_query(user_id, folder_id)).sort([
-        ('message_id', 1), ('_id', 1)]).limit(MAX_FOLDER_FILES).to_list(length=MAX_FOLDER_FILES)
-
-
-async def page_items(user_id, tab, query, page, page_size):
-    if tab == 'single':
-        collection, filters, field = db.direct_files, _file_query(user_id, None), 'file_name'
-    else:
-        collection, filters, field = _folders(), {'user_id': user_id, 'state': 'ready'}, 'name'
+async def page_items(user_id, query, page, page_size):
+    # Include uploads from both finished and open folders created by older releases.
+    filters = {'user_id': user_id, 'episodes': {'$exists': False}, **uploads_filter()}
     if query:
-        filters[field] = {'$regex': re.escape(query), '$options': 'i'}
-    total = await collection.count_documents(filters)
+        filters['file_name'] = {'$regex': re.escape(query), '$options': 'i'}
+    total = await db.direct_files.count_documents(filters)
     pages = max(1, (total + page_size - 1) // page_size)
     page = min(page, pages)
-    items = await collection.find(filters).sort([('created_at', -1), ('_id', 1)]).skip(
+    items = await db.direct_files.find(filters).sort([('created_at', -1), ('_id', 1)]).skip(
         (page - 1) * page_size).limit(page_size).to_list(length=page_size)
     return items, total, page, pages
 
