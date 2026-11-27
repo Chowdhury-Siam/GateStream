@@ -1,15 +1,12 @@
 from hydrogram import Client
-import aiohttp
-from bot.modules.metadata import Classifier
 from hydrogram import filters
 from hydrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
-from bot.clients import TelegramBot
 from bot.config import Server
 from bot.database.files import save_file
 from bot.modules.decorators import verify_user, verify_admin
 from bot.modules.parser import parse_telegram_link
 from bot.modules.telegram import get_message, get_file_properties, is_media_message
-from bot.modules.static import MediaLinksText, FileLinksText, InvalidLinkText, get_human_size
+from bot.modules.static import MediaLinksText, InvalidLinkText, get_human_size
 
 @Client.on_message(filters.command(['link', 'movie', 'anime', 'series', 'link_anime', 'link_movie', 'link_series']) & filters.private)
 @verify_user
@@ -79,6 +76,9 @@ async def link_command(_, msg: Message):
         metadata = None
         if not target_category:
             if mime_type.startswith('video/') or file_name.lower().endswith(('.mp4', '.mkv', '.webm', '.avi', '.mov', '.ts')):
+                import aiohttp
+                from bot.modules.metadata import Classifier
+
                 async with aiohttp.ClientSession() as session:
                     metadata = await Classifier(session).classify(file_name)
                 target_category = metadata['category']
