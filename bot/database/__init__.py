@@ -13,14 +13,14 @@ class MongoDatabase:
         self.webseries = None
         self.direct_files = None
         self._omni_client = None
-        self.omni_db = None
 
     def connect(self):
         try:
             self._client = AsyncIOMotorClient(
                 Database.DATABASE_URL,
                 maxPoolSize=10,  # Keep connection pool compact for low RAM
-                minPoolSize=1,
+                minPoolSize=0,
+                maxIdleTimeMS=60000,
                 serverSelectionTimeoutMS=10000
             )
             self.db = self._client[Database.DATABASE_NAME]
@@ -33,22 +33,22 @@ class MongoDatabase:
             logger.error("MongoDB setup failed (%s).", type(e).__name__)
             raise e
 
-        # Initialize upstream OmniArchiverDB connection (authoritative catalog source)
-        try:
-            omni_uri = getattr(Database, 'OMNI_MONGO_URI', None)
-            if omni_uri:
-                self._omni_client = AsyncIOMotorClient(
-                    omni_uri,
-                    maxPoolSize=5,
-                    minPoolSize=1,
-                    serverSelectionTimeoutMS=7000
-                )
-                self.omni_db = self._omni_client['OmniArchiverDB']
-            elif self._client is not None:
-                self.omni_db = self._client['OmniArchiverDB']
-            logger.info("Upstream catalog connection initialized.")
-        except Exception as e:
-            logger.warning("Upstream database setup failed (%s).", type(e).__name__)
+    @property
+    def omni_db(self):
+        """Open the optional legacy catalog only when an integration uses it."""
+        if self._client is None:
+            return None
+        if not Database.OMNI_MONGO_URI:
+            return self._client['OmniArchiverDB']
+        if self._omni_client is None:
+            self._omni_client = AsyncIOMotorClient(
+                Database.OMNI_MONGO_URI,
+                maxPoolSize=5,
+                minPoolSize=0,
+                maxIdleTimeMS=60000,
+                serverSelectionTimeoutMS=7000,
+            )
+        return self._omni_client['OmniArchiverDB']
 
     async def create_indexes(self):
         """Ensures high-speed O(1) indexes to eliminate query latency and CPU spikes."""
@@ -65,10 +65,7 @@ class MongoDatabase:
                 if collection is not None:
                     await collection.create_index([('channel_id', 1), ('message_id', 1), ('catalog_section', 1)])
             if self.db is not None:
-                await self.db['download_tickets'].create_index('expires_at', expireAfterSeconds=0)
                 await self.db['library_sessions'].create_index('expires_at', expireAfterSeconds=0)
-                await self.db['library_folders'].create_index([('user_id', 1), ('state', 1), ('created_at', -1)])
-                await self.db['direct_files'].create_index([('user_id', 1), ('personal_index_id', 1), ('created_at', -1)])
                 await self.db['direct_files'].create_index('source_key', sparse=True)
             logger.info("MongoDB database indexes ensured.")
         except Exception as e:
@@ -82,7 +79,7 @@ class MongoDatabase:
                 except Exception as error:
                     logger.warning('MongoDB close failed (%s).', type(error).__name__)
         self._omni_client = self._client = None
-        self.db = self.omni_db = None
+        self.db = None
         self.movies = self.anime = self.webseries = self.direct_files = None
 
     def get_collection(self, category: str):
