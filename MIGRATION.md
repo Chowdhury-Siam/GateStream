@@ -1,4 +1,4 @@
-# Upgrade to GateStream 3.0.1
+# Upgrade to GateStream 3.0.2
 
 1. Stop the existing application gracefully and disable its cron entry during
    the upgrade. Check the running PIDs before terminating them.
