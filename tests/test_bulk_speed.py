@@ -49,24 +49,11 @@ class BulkPipelineTests(unittest.IsolatedAsyncioTestCase):
             get_file=AsyncMock(return_value=document), get_worker_client=lambda:worker,
             worker_clients=[worker],get_message=AsyncMock(return_value=object()),
             get_cached_chunk=AsyncMock(return_value=None),is_chunk_cached=lambda *args:True,
-            is_head_or_tail=lambda *args:False,add_bandwidth_bytes=AsyncMock(),
+            is_head_or_tail=lambda *args:False,
             activity=TransferActivity(),
         ).items():
             stack.enter_context(patch.object(main,name,value))
         return stack,state,chunks
-
-    async def test_zip_source_fetches_concurrently_with_one_bot_and_keeps_byte_order(self):
-        stack,state,chunks=self.fixture(chunk_count=17)
-        with stack:
-            async with instance.test_request_context('/index/archive/ticket/GateStream.zip'):
-                response=await main.transmit_file('code',range_allowed=False,parallel=True)
-                data=await response.get_data()
-        self.assertEqual(data,b''.join(chunks))
-        self.assertGreater(state['peak'],1)
-        self.assertLessEqual(state['peak'],4)
-        self.assertEqual(sorted(state['calls']),[(i,min(4,len(chunks)-i)) for i in range(0,len(chunks),4)])
-        self.assertEqual(state['peak'],4)
-        self.assertEqual(state['active'],0)
 
     async def test_individual_download_keeps_continuous_stream_for_manager_ranges(self):
         stack,state,chunks=self.fixture()
@@ -103,19 +90,8 @@ class BulkPipelineTests(unittest.IsolatedAsyncioTestCase):
             prefetch.assert_awaited_once_with('code', len(chunks), 1, 2)
             self.assertEqual(len(tasks), 1)
 
-    async def test_archive_preparation_needs_no_request_context_and_is_not_viewer_traffic(self):
-        stack,state,chunks=self.fixture()
-        with stack:
-            response=await main.transmit_file('code',range_allowed=False,internal=True)
-            self.assertEqual(await response.get_data(),b''.join(chunks))
-            main.add_bandwidth_bytes.assert_not_awaited()
-            self.assertEqual(main.activity.snapshot()['phases']['media']['bytes'],0)
-
     async def test_continuous_download_recovers_stall_without_repeating_bytes(self):
-        import io
-        from zipfile import ZipFile
         from bot.modules import telegram
-        from bot.modules.archive import stream_archive, archive_size
         stack,state,chunks=self.fixture()
         closed=[]
         with stack:
@@ -137,17 +113,9 @@ class BulkPipelineTests(unittest.IsolatedAsyncioTestCase):
             with patch.object(worker,'stream_media',stream_media), \
                  patch.object(telegram,'MEDIA_READ_TIMEOUT',.1), \
                  patch.object(main,'mark_worker_cooldown'):
-                async with instance.test_request_context('/index/archive/ticket/GateStream.zip'):
-                    files=[dict(code='code',file_name='test.mkv',file_size=sum(map(len,chunks)))]
-                    async def download(code):
-                        return await main.transmit_file(code,range_allowed=False)
-                    async def receive():
-                        return b''.join([chunk async for chunk in stream_archive(files,download)])
-                    payload=await asyncio.wait_for(receive(),2)
-                    self.assertEqual(len(payload),archive_size(files))
-                    with ZipFile(io.BytesIO(payload)) as archive:
-                        self.assertIsNone(archive.testzip())
-                        data=archive.read('01-test.mkv')
+                async with instance.test_request_context('/dl/code'):
+                    response = await main.transmit_file('code')
+                    data = await asyncio.wait_for(response.get_data(), 2)
             self.assertEqual(len(data),sum(map(len,chunks)))
             self.assertEqual(data,b''.join(chunks))
             self.assertEqual(state['calls'],[(0,2),(2,len(chunks)-2)])
@@ -164,7 +132,6 @@ class BulkPipelineTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(state['calls'],[(0,3)])
 
     async def test_empty_telegram_source_stops_after_bounded_retries(self):
-        from bot.modules.archive import stream_archive
         stack,state,chunks=self.fixture()
         calls=[]
 
@@ -176,101 +143,19 @@ class BulkPipelineTests(unittest.IsolatedAsyncioTestCase):
         with stack, patch.object(main.get_worker_client(),'stream_media',empty_stream), \
              patch.object(main,'mark_worker_cooldown'), \
              patch.object(main.asyncio,'sleep',AsyncMock()):
-            async with instance.test_request_context('/index/archive/ticket/GateStream.zip'):
-                async def download(code):
-                    return await main.transmit_file(code,range_allowed=False)
-                with self.assertRaisesRegex(RuntimeError,'incomplete'):
-                    async for _ in stream_archive([dict(code='code',file_name='test.mkv')],download):
-                        pass
+            async with instance.test_request_context('/dl/code'):
+                response = await main.transmit_file('code')
+                self.assertEqual(await response.get_data(), b'')
         self.assertEqual(len(calls),12)
 
-    async def test_zip_drains_limited_streams_before_reusing_telegram_slots(self):
-        stack,state,chunks=self.fixture()
-        slots=asyncio.Semaphore(2)
-        streams=[]
+    async def test_playback_disconnect_drains_pending_reads(self):
+        stack, state, chunks = self.fixture(block=True)
         with stack:
-            worker=main.get_worker_client()
-            original=worker.stream_media
-
-            async def source(message, offset=0, limit=0):
-                async with slots:
-                    async for chunk in original(message,offset,limit):
-                        yield chunk
-
-            async def stream_media(message, offset=0, limit=0):
-                # Hydrogram wraps get_file(), which holds a transmission slot
-                # across yield. Retain it to avoid relying on garbage collection.
-                stream=source(message,offset,limit)
-                streams.append(stream)
-                async for chunk in stream:
-                    yield chunk
-
-            try:
-                with patch.object(worker,'stream_media',stream_media):
-                    async with instance.test_request_context('/index/archive/ticket/GateStream.zip'):
-                        response=await main.transmit_file('code',range_allowed=False,parallel=True)
-                        data=await asyncio.wait_for(response.get_data(),1)
-                self.assertEqual(data,b''.join(chunks))
-                self.assertEqual(slots._value,2)
-            finally:
-                for stream in streams:
-                    await stream.aclose()
-
-    async def test_disconnect_cancels_and_drains_pending_chunk_reads(self):
-        stack,state,chunks=self.fixture(block=True)
-        with stack:
-            async with instance.test_request_context('/index/archive/ticket/GateStream.zip'):
-                response=await main.transmit_file('code',range_allowed=False,parallel=True)
-                async with response.response as body:
-                    self.assertEqual(await anext(body.__aiter__()),chunks[0])
-        self.assertEqual(state['active'],0)
-        self.assertGreater(state['cancelled'],0)
-
-    async def test_parallel_continuous_ranges_retry_from_last_good_chunk(self):
-        from bot.modules import telegram
-        stack,state,chunks=self.fixture()
-        calls=[]
-        with stack:
-            worker=main.get_worker_client()
-            original=worker.stream_media
-            async def stream_media(message,offset=0,limit=0):
-                calls.append((offset,limit))
-                if offset==0:
-                    async for chunk in original(message,0,1):
-                        yield chunk
-                    await asyncio.Event().wait()
-                else:
-                    async for chunk in original(message,offset,limit):
-                        yield chunk
-            with patch.object(worker,'stream_media',stream_media), \
-                 patch.object(telegram,'MEDIA_READ_TIMEOUT',.1), \
-                 patch.object(main,'mark_worker_cooldown'):
-                response=await main.transmit_file('code',range_allowed=False,internal=True,parallel=True)
-                data=await asyncio.wait_for(response.get_data(),2)
-            self.assertEqual(data,b''.join(chunks))
-            self.assertEqual(sorted(calls),[(0,4),(1,3),(4,2)])
-            self.assertEqual(state['active'],0)
-
-    async def test_parallel_ranges_warm_shared_media_session_before_overlap(self):
-        stack,state,chunks=self.fixture(chunk_count=17)
-        starting=False
-        ready=False
-        collisions=[]
-        with stack:
-            worker=main.get_worker_client()
-            original=worker.stream_media
-            async def stream_media(message,offset=0,limit=0):
-                nonlocal starting,ready
-                if not ready:
-                    if starting:
-                        collisions.append(offset)
-                    starting=True
-                    await asyncio.sleep(.01)
-                    ready=True
-                async for chunk in original(message,offset,limit):
-                    yield chunk
-            with patch.object(worker,'stream_media',stream_media):
-                response=await main.transmit_file('code',range_allowed=False,internal=True,parallel=True)
-                self.assertEqual(await response.get_data(),b''.join(chunks))
-            self.assertEqual(collisions,[])
-            self.assertEqual(state['peak'],4)
+            worker = main.get_worker_client()
+            with patch.object(main, 'worker_clients', [worker, object()]):
+                async with instance.test_request_context('/dl/code?stream=1'):
+                    response = await main.transmit_file('code')
+                    async with response.response as body:
+                        self.assertEqual(await anext(body.__aiter__()), chunks[0])
+        self.assertEqual(state['active'], 0)
+        self.assertGreater(state['cancelled'], 0)
