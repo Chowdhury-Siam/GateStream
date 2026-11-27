@@ -1,18 +1,13 @@
-# GateStream v2.0.34 validation
+# v2.0.36 validation
 
-| Check | Result for GitHub |
-| --- | --- |
-| Python 3.11.13 on Linux | 144 passed |
-| Python 3.12.14 on Linux | 144 passed |
-| Cloudflare Worker suite on Node 24 | 8 passed |
+The GitHub package passed 119 Python tests on Linux with Python 3.11.13 and 3.12.14.
+Checks cover single-process launch, duplicate prevention across restarts, cache
+cleanup, legacy statistics and individual download ranges.
 
-Run the Python suite with `python -m unittest discover -s tests -v`. Run `node --test cloudflare/worker.test.mjs` from the GitHub package for the Worker suite.
+The median idle footprint fell from 95.8 MiB to 80.3 MiB PSS over three runs per
+build on Linux using Python 3.11.13. The bot loaded its real handlers and HTTP
+server and answered `/health`. Telegram and MongoDB were mocked. These are local
+process measurements. Serv00 account memory depends on live clients, MongoDB,
+traffic, and other processes on the account.
 
-A local Python 3.11.13 comparison used 300 cached HTTP range responses with mocked
-file metadata and cache reads. Both versions returned the same requested bytes
-and HTTP 206 status. The old build ran 300 full garbage collections and
-v2.0.34 ran zero during the comparison. A separate simulated 4,096-chunk Telegram
-read eliminated the 4,097 helper tasks created for reads and EOF in the old
-build. These checks isolate Python overhead. Actual throughput, CPU and RAM on
-Serv00 depend on Telegram, the network and the number of active connections.
-The packages were tested on Linux.
+All eight Cloudflare Worker tests passed on Node.js 24.
