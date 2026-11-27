@@ -1,5 +1,29 @@
 # Changelog
 
+## v2.0.36
+
+- Run the cron-managed bot as a single process. The app holds the existing lock
+  across graceful restarts, so duplicate cron invocations still exit.
+- Defer metadata networking, worker setup encryption, and the optional upstream
+  MongoDB connection until needed. Let unused MongoDB data connections expire.
+- Cap Hydrogram's message cache at 512 entries for the primary bot and 128 per
+  auxiliary worker. Media lookups skip reply history.
+- Remove the redundant bandwidth write after transfers and the retired ZIP
+  counter from the tracker. Activity checkpoints retain historical MongoDB fields.
+- Restore disk cache eviction for changed and revoked files. The owner’s
+  `/clean` command clears Telegram caches and local media chunks.
+
+## v2.0.35
+
+- Remove the Telegram `/index` command and its menu button, batch ZIP creation,
+  folder sharing, archive routes and archive cache.
+- Show files from old folders individually in the signed-in library alongside
+  other uploads. Existing single-file URLs and the MongoDB records still work.
+- Keep HTTP byte ranges for single-file resume and download managers. A ZIP
+  uploaded as an individual Telegram file can still be downloaded.
+- Carry forward older ZIP totals in stored checkpoints for compatibility.
+  The live dashboard and Telegram stats show individual-file totals.
+
 ## v2.0.34
 
 - Check RSS every five seconds in one application task instead of forcing a full
