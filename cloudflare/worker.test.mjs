@@ -126,3 +126,17 @@ test('caller grouping key is stripped when no edge visitor address exists', asyn
     'X-GateStream-Client': 'caller-controlled',
   }}), env);
 });
+
+
+test('forwards authenticated transfer stop forms to the origin', async (t) => {
+ t.mock.method(globalThis, 'fetch', async (url, options) => {
+  assert.equal(url, 'https://origin.example/api/transfers/17/stop');
+  assert.equal(options.method, 'POST');
+  assert.equal(options.headers.get('Cookie'), 'gatestream_library=private');
+  assert.equal(await new Response(options.body).text(), 'csrf=token');
+  return new Response('{"stopped":true}', {headers: {'Content-Type':'application/json'}});
+ });
+ const response=await worker.fetch(new Request('https://proxy.example/api/transfers/17/stop', {method:'POST',headers:{Cookie:'gatestream_library=private'},body:'csrf=token'}),env);
+ assert.equal(response.status,200);
+ assert.deepEqual(await response.json(),{stopped:true});
+});
