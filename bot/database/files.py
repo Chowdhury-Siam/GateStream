@@ -15,7 +15,7 @@ async def save_file(
     duration: int = 0,
     duration_formatted: str = "N/A",
     metadata: dict = None,
-    *, personal=False, personal_index_id=None, source_key=None,
+    *, personal=False, source_key=None,
 ) -> dict:
     """Saves a single movie or direct file."""
     collection = db.get_collection(category)
@@ -69,8 +69,6 @@ async def save_file(
         'created_at': datetime.utcnow()
     }
     
-    if personal_index_id is not None:
-        doc['personal_index_id'] = personal_index_id
     if source_key is not None:
         doc['source_key'] = source_key
     if metadata:
@@ -83,7 +81,7 @@ async def get_group_upload(source_key, user_id):
         {'source_key': source_key, 'user_id': user_id, 'catalog_section': 'personal'})
 
 
-async def get_file(code: str, category_hint: str = None) -> dict | None:
+async def get_file(code: str) -> dict | None:
     """Resolves a file by its unique code, supporting both single documents and episodes inside batch documents."""
     if not code:
         return None
@@ -93,10 +91,6 @@ async def get_file(code: str, category_hint: str = None) -> dict | None:
         if col is not None:
             doc = await col.find_one({'_id': code})
             if doc:
-                # If it's a single file (not a batch container with episodes array)
-                if 'episodes' not in doc:
-                    return doc
-                # If the batch _id itself was requested, return it
                 return doc
 
     # 2. Search inside batch documents (anime, webseries)
@@ -156,24 +150,3 @@ async def delete_file(code: str) -> bool:
                 return True
 
     return False
-
-async def add_bandwidth_bytes(byte_count: int):
-    try:
-        if db.db is not None and byte_count > 0:
-            await db.db['analytics'].update_one(
-                {'_id': 'bandwidth'},
-                {'$inc': {'bytes_streamed': byte_count, 'requests': 1}},
-                upsert=True
-            )
-    except Exception:
-        pass
-
-async def get_bandwidth_stats() -> tuple[int, int]:
-    try:
-        if db.db is not None:
-            doc = await db.db['analytics'].find_one({'_id': 'bandwidth'})
-            if doc:
-                return doc.get('bytes_streamed', 0), doc.get('requests', 0)
-    except Exception:
-        pass
-    return 0, 0
