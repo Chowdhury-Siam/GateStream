@@ -134,8 +134,6 @@ class Server:
 
 
 class Resources:
-    ZIP_CACHE_MAX_MB = integer('ZIP_CACHE_MAX_MB', 8192)
-    ZIP_CACHE_DIR = configured_path('ZIP_CACHE_DIR', PROJECT_ROOT / 'cache' / 'archives')
     MEDIA_CACHE_MAX_MB = integer('MEDIA_CACHE_MAX_MB', 500)
     MEDIA_CACHE_DIR = configured_path('MEDIA_CACHE_DIR', PROJECT_ROOT / 'cache' / 'media')
     CACHE_FREE_MB = integer('CACHE_FREE_MB', 64)
