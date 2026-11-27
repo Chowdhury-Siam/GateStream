@@ -1,4 +1,4 @@
-# GateStream 3.0.0
+# GateStream 3.0.1
 
 GateStream connects Telegram files to resumable HTTP downloads and browser
 playback. The bot, origin server, personal library, worker management, and
@@ -18,8 +18,14 @@ chmod +x start.sh scripts/watchdog.sh bin/gatestream-*
 ```
 
 Use `SERV00.md` for FreeBSD shared hosting and `MIGRATION.md` for an existing
-Python installation. Configuration loads automatically at startup. The command
-`./start.sh --version` prints the application version.
+installation. Configuration loads automatically at startup. The command
+`./start.sh --version` prints the application version. Startup from any directory
+uses the project configuration. Every launch shares the same duplicate-instance
+lock, including direct binary launches from the project directory.
+
+Use `scripts/watchdog.sh` for Cron recovery as documented in `SERV00.md`.
+The wrapper preserves startup errors for Cron mail. `/restart` and memory
+restarts replace the Go process; a crash is recovered by the next Cron run.
 
 ## Features
 
@@ -140,9 +146,11 @@ docker run --rm --env-file .env -p YOUR_PORT:8080 \
   -v gatestream-cache:/app/cache gatestream
 ```
 
-Match the container's `PORT` to the port mapping if `.env` overrides it. The
-image runs as an unprivileged user. Mount the previous `.session` files readably
-inside `/app` when importing private-channel peers from a Python installation.
+Set `BIND_ADDRESS=0.0.0.0` and `PORT=8080` in the container environment for
+this mapping, or change the mapping to match the configured port. A loopback
+bind copied from shared hosting is unreachable through Docker port publishing. The image runs as an unprivileged user. Mount
+the previous `.session` files readably
+inside `/app` when importing private-channel peers from an earlier installation.
 Hugging Face Spaces can use the Dockerfile with its required bind address and
 port set through the platform environment. AlwaysData and Linux VPS hosts can
 run `start.sh` or a binary directly.
@@ -152,9 +160,16 @@ run `start.sh` or a binary directly.
 ```sh
 go test -race ./...
 go vet ./...
+/bin/sh scripts/test-deployment.sh
 node --test cloudflare/worker.test.mjs
 ```
 
 See `VALIDATION.md` for what was verified and what requires a live deployment.
 Upstream attribution is in `ACKNOWLEDGEMENTS.md`. Dependency notices accompany
 the supplied binaries under `third_party_licenses/`.
+
+The Go CI workflow builds both platform binaries and makes them available as
+a downloadable artifact. Release ZIPs already contain executable binaries and
+`bin/SHA256SUMS`. Run `/bin/sh scripts/check-release.sh` to verify both hashes
+using the native FreeBSD or Linux SHA-256 utility. FreeBSD 14.3 execution is
+covered by a separate VM job when that workflow runs in your repository.
