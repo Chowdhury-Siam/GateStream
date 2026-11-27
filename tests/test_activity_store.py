@@ -25,7 +25,13 @@ class Collection:
         return copy.deepcopy(self.documents.get(query['_id']))
 
     async def update_one(self, query, update, **kwargs):
-        self.documents[query['_id']] = dict(_id=query['_id'], **copy.deepcopy(update['$set']))
+        document = self.documents.setdefault(query['_id'], {'_id': query['_id']})
+        for key, value in update['$set'].items():
+            fields = key.split('.')
+            target = document
+            for field in fields[:-1]:
+                target = target.setdefault(field, {})
+            target[fields[-1]] = copy.deepcopy(value)
         self.writes += 1
         if self.timeout_after_write:
             self.timeout_after_write = False
@@ -39,16 +45,14 @@ class ActivityPersistenceTests(unittest.IsolatedAsyncioTestCase):
         store = ActivityStore(first, lambda: database)
         self.assertTrue(await store.flush())
         async def source(): yield b'abcdef'
-        for category in ('single', 'zip'):
-            stream = first.track_stream(source(), 6, category,
-                download=(category, 0, 6, b'manager'))
-            await anext(stream)
-            await stream.aclose()
+        stream = first.track_stream(source(), 6, 'file', download=(0, 6, b'manager'))
+        await anext(stream)
+        await stream.aclose()
         self.assertTrue(await store.flush())
         second = TransferActivity()
         self.assertTrue(await ActivityStore(second, lambda: database).flush())
         phase = second.snapshot()['phases']['media']
-        self.assertEqual((phase['single_downloads'], phase['zip_downloads']), (1, 1))
+        self.assertEqual(phase['single_downloads'], 1)
 
     async def test_restart_retains_totals_and_closes_previous_active_transfers(self):
         database=Collection()
@@ -164,15 +168,15 @@ class ActivityPersistenceTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_new_download_totals_survive_restart_with_older_checkpoint_fields(self):
         database=Collection()
-        database.documents['transfer_activity']=dict(phases={'media':{'completed':20,'bytes':100}})
+        database.documents['transfer_activity']=dict(phases={'media':{'completed':20,'bytes':100,'zip_downloads':7}})
         tracker=TransferActivity()
         store=ActivityStore(tracker,lambda:database)
         self.assertTrue(await store.flush())
-        tracker.downloaded_range(('file',b'client'),'single',0,6,6)
-        tracker.downloaded_range(('zip',b'client'),'zip',0,3,6)
-        tracker.downloaded_range(('zip',b'client'),'zip',3,6,6)
+        tracker.downloaded_range(('file', b'client'), 0, 6, 6)
         self.assertTrue(await store.flush())
         restarted=TransferActivity()
         self.assertTrue(await ActivityStore(restarted,lambda:database).flush())
         phase=restarted.snapshot()['phases']['media']
-        self.assertEqual((phase['single_downloads'],phase['zip_downloads'],phase['completed'],phase['bytes']),(1,1,20,100))
+        self.assertEqual((phase['single_downloads'], phase['completed'], phase['bytes']), (1, 20, 100))
+        self.assertNotIn('zip_downloads', phase)
+        self.assertEqual(database.documents['transfer_activity']['phases']['media']['zip_downloads'], 7)
