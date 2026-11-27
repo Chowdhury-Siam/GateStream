@@ -1,4 +1,4 @@
-# GateStream 3.0.1 on Serv00 / FreeBSD
+# GateStream 3.0.2 on Serv00 / FreeBSD
 
 Run the supplied native FreeBSD AMD64 binary as one application process.
 The release ZIP includes `bin/gatestream-freebsd-amd64`, its Linux counterpart,
