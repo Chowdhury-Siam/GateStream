@@ -50,7 +50,6 @@ class BulkPipelineTests(unittest.IsolatedAsyncioTestCase):
             worker_clients=[worker],get_message=AsyncMock(return_value=object()),
             get_cached_chunk=AsyncMock(return_value=None),is_chunk_cached=lambda *args:True,
             is_head_or_tail=lambda *args:False,add_bandwidth_bytes=AsyncMock(),
-            flush_ram=lambda:None,check_memory_circuit_breaker=lambda:None,
             activity=TransferActivity(),
         ).items():
             stack.enter_context(patch.object(main,name,value))
@@ -78,6 +77,31 @@ class BulkPipelineTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(data,b''.join(chunks))
         self.assertEqual(state['peak'],1)
         self.assertEqual(state['calls'],[(0,len(chunks))])
+
+    async def test_cold_download_uses_foreground_read_and_playback_prefetches_only_tail(self):
+        stack, state, chunks = self.fixture()
+        tasks = []
+
+        def spawn(coroutine):
+            task = asyncio.create_task(coroutine)
+            tasks.append(task)
+            return task
+
+        with stack, patch.object(main, 'is_chunk_cached', return_value=False), \
+             patch.object(main, 'spawn', side_effect=spawn), \
+             patch.object(main, 'prefetch_tail_chunk', AsyncMock()) as prefetch:
+            async with instance.test_request_context('/dl/code', headers={'Range': 'bytes=0-31'}):
+                response = await main.transmit_file('code')
+                self.assertEqual(await response.get_data(), chunks[0][:32])
+            self.assertEqual(tasks, [])
+            self.assertEqual(state['calls'], [(0, 1)])
+
+            async with instance.test_request_context('/dl/code?stream=1', headers={'Range': 'bytes=0-31'}):
+                response = await main.transmit_file('code')
+                self.assertEqual(await response.get_data(), chunks[0][:32])
+            await asyncio.gather(*tasks)
+            prefetch.assert_awaited_once_with('code', len(chunks), 1, 2)
+            self.assertEqual(len(tasks), 1)
 
     async def test_archive_preparation_needs_no_request_context_and_is_not_viewer_traffic(self):
         stack,state,chunks=self.fixture()
