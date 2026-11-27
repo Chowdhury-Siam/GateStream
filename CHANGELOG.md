@@ -1,5 +1,13 @@
 # Changelog
 
+## v3.0.2
+
+- Resolve the test executable to an absolute path before subprocess launches and
+  exec restarts, including when CI invokes the compiled test binary relatively.
+- Add a relative-invocation regression check and stage-labelled FreeBSD checks
+  that retain the original failure status and upload the VM test log in CI.
+- Rebuild both packaged platform binaries with matching checksums.
+
 ## v3.0.1
 
 - Update Serv00 deployment for the native Go binary, including executable
