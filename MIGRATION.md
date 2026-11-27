@@ -1,4 +1,4 @@
-# Upgrade from GateStream 2.0.36 to 3.0.0
+# Upgrade to GateStream 3.0.1
 
 1. Stop the existing application gracefully and disable its cron entry during
    the upgrade. Check the running PIDs before terminating them.
@@ -28,8 +28,8 @@ session-string layout. Existing encrypted repair sessions can be opened by the
 Go version. A newly connected owner account is saved in that compatible format.
 The setup page requires the account ID to match `OWNER_ID`.
 
-The command `python -m bot` belongs to the earlier runtime. Start the Go version
-with `./start.sh`. Bot commands and web routes are implemented in Go. Bot command
+Start GateStream with `./start.sh`. Replace earlier runtime-specific startup
+and Cron entries with the supplied launchers; retain one Cron recovery entry. Bot commands and web routes are implemented in Go. Bot command
 updates use Telegram Bot API and media reads use MTProto. An existing webhook or
 another Bot API poller can interfere with command reception. Resolve that
 conflict before running this installation as the active bot.
@@ -38,3 +38,17 @@ To roll back, stop the Go process, restore the previous source and launcher, and
 reuse the same configuration and legacy `.session` files. Keep the database and
 its records. A library login established in the new version may need a fresh
 sign-in through the previous version's bot menu.
+
+## Updating an existing Go deployment
+
+Disable recovery Cron temporarily and stop the running process with SIGTERM.
+Extract this release into a clean directory and transfer your existing `.env`
+or `config.env`, `sessions-go/`, any retained legacy `.session` files and desired
+media cache. Keep the original directory for rollback. Do not overwrite an
+executing binary in place or copy an active `.watchdog.lock` to the new tree.
+
+Keep all database and public URL settings. Make the packaged binary executable,
+check `./start.sh --version`, and run it in the foreground before restoring
+the single Cron entry for the new directory. Cron recovery and foreground
+starts now use the same lock. A second launch exits successfully without
+starting services. Keep the lock file in place while the process is running.
