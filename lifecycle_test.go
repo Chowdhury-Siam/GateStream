@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"log"
@@ -9,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strings"
 	"syscall"
@@ -102,7 +104,10 @@ func TestWatchdogHelper(t *testing.T) {
 		return
 	}
 	originalExecutable := os.Args[0]
-	os.Args = []string{originalExecutable, "--watchdog"}
+	os.Args = []string{originalExecutable}
+	if os.Getenv("GATESTREAM_TEST_LOCK_HELPER") == "legacy" {
+		os.Args = append(os.Args, "--watchdog")
+	}
 	lock, acquired, err := projectLock()
 	if err != nil {
 		fmt.Println("ERROR", err)
@@ -120,8 +125,62 @@ func TestWatchdogHelper(t *testing.T) {
 		}
 	}
 	fmt.Printf("ACQUIRED %d\n", os.Getpid())
+	if os.Getenv("GATESTREAM_TEST_LOCK_HELPER") == "wait" {
+		signals := make(chan os.Signal, 1)
+		signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
+		<-signals
+		signal.Stop(signals)
+	}
 	_ = lock.Close()
 	os.Exit(0)
+}
+
+func TestLockRecoveryAfterSignalsAndCrash(t *testing.T) {
+	t.Chdir(t.TempDir())
+	for _, stopSignal := range []syscall.Signal{syscall.SIGINT, syscall.SIGTERM, syscall.SIGKILL} {
+		t.Run(stopSignal.String(), func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			child := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestWatchdogHelper$")
+			child.Env = append(os.Environ(), "GATESTREAM_TEST_LOCK_HELPER=wait", "GATESTREAM_LOCK_FD=")
+			stdout, err := child.StdoutPipe()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = child.Start(); err != nil {
+				t.Fatal(err)
+			}
+			defer child.Process.Kill()
+			line := bufio.NewScanner(stdout)
+			if !line.Scan() || !strings.HasPrefix(line.Text(), "ACQUIRED ") {
+				t.Fatal("child did not hold lock", line.Text())
+			}
+			duplicate := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestWatchdogHelper$")
+			duplicate.Env = append(os.Environ(), "GATESTREAM_TEST_LOCK_HELPER=legacy", "GATESTREAM_LOCK_FD=")
+			if output, err := duplicate.CombinedOutput(); err != nil || !strings.Contains(string(output), "BUSY") {
+				t.Fatal("Cron duplicate not rejected", string(output), err)
+			}
+			if err = child.Process.Signal(stopSignal); err != nil {
+				t.Fatal(err)
+			}
+			err = child.Wait()
+			if stopSignal != syscall.SIGKILL && err != nil {
+				t.Fatal("unclean signal exit", err)
+			}
+			next := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestWatchdogHelper$")
+			next.Env = append(os.Environ(), "GATESTREAM_TEST_LOCK_HELPER=check", "GATESTREAM_LOCK_FD=")
+			if output, err := next.CombinedOutput(); err != nil || !strings.Contains(string(output), "ACQUIRED ") {
+				t.Fatal("next Cron invocation could not recover", string(output), err)
+			}
+		})
+	}
+}
+
+func TestDeploymentLaunchers(t *testing.T) {
+	command := exec.Command("/bin/sh", "scripts/test-deployment.sh")
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatal(string(output), err)
+	}
 }
 func TestWatchdogDuplicatePreventionAndExecRestart(t *testing.T) {
 	t.Chdir(t.TempDir())
