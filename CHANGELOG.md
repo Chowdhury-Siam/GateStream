@@ -1,5 +1,22 @@
 # Changelog
 
+## v3.0.1
+
+- Update Serv00 deployment for the native Go binary, including executable
+  checks, checksums, automatic configuration, proxy setup and sparse Cron
+  environments. Remove obsolete runtime commands from current instructions.
+- Preserve watchdog diagnostics and exit codes; execute through POSIX sh and
+  retain one application process. No virtual environment or shell supervisor.
+- Share the duplicate-instance lock across foreground, direct and Cron starts.
+  Preserve it across exec restarts and release it on signals or crashes so
+  the next scheduled Cron invocation can recover.
+- Add launcher checks for FreeBSD AMD64 selection, paths with spaces, argument
+  forwarding, missing permissions/binaries, startup failures and PID retention.
+  Extend signal/crash lock-recovery tests and add a FreeBSD 14.3 CI job.
+- Package newly built Linux/FreeBSD AMD64 binaries with matching SHA256SUMS;
+  publish CI build artifacts and exclude secrets/state from Docker build input.
+- Preserve all file routes, database settings, session migration and bot features.
+
 ## v3.0.0
 
 - Rewrite the bot, HTTP origin, personal library, worker repair and activity
