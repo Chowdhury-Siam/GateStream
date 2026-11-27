@@ -71,6 +71,35 @@ class MediaQuotaTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(list(Path(self.directory.name).iterdir()),[])
 
 
+    async def test_slow_tail_prefetch_is_bounded_and_cancellation_releases_its_slot(self):
+        from bot import clients
+        from bot.modules import telegram
+
+        entered = asyncio.Event()
+
+        async def read(*args):
+            entered.set()
+            await asyncio.Event().wait()
+
+        with patch.object(clients, 'get_worker_client', return_value=clients.TelegramBot), \
+             patch.object(telegram, 'get_message', AsyncMock(return_value=object())), \
+             patch.object(telegram, 'get_media_chunk', AsyncMock(side_effect=read)) as download:
+            first = asyncio.create_task(cache.prefetch_tail_chunk('one', 10, 1, 2))
+            try:
+                await asyncio.wait_for(entered.wait(), timeout=1)
+                await asyncio.wait_for(cache.prefetch_tail_chunk('two', 10, 1, 3), timeout=1)
+                download.assert_awaited_once()
+            finally:
+                first.cancel()
+                await asyncio.gather(first, return_exceptions=True)
+            self.assertFalse(cache._IN_FLIGHT_CHUNKS)
+
+            download.side_effect = None
+            download.return_value = b'tail'
+            await cache.prefetch_tail_chunk('two', 10, 1, 3)
+            self.assertEqual(await cache.get_cached_chunk('two', 9), b'tail')
+
+
 class ZIPQuotaTests(unittest.IsolatedAsyncioTestCase):
     async def test_unavailable_storage_and_zero_budget_have_clear_admission_failures(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -124,3 +153,18 @@ class PortableMemoryTests(unittest.TestCase):
              patch.object(memory.gc,'collect') as collect:
             memory.flush_ram()
         collect.assert_called_once()
+
+
+class MemoryMonitorTests(unittest.IsolatedAsyncioTestCase):
+    async def test_monitor_checks_idle_process_and_stops_promptly(self):
+        stop = asyncio.Event()
+        with patch.object(memory, 'get_current_ram_mb', side_effect=lambda: self.sample(stop)) as rss, \
+             patch.object(memory, 'flush_ram') as collect:
+            await asyncio.wait_for(memory.monitor_memory(stop), timeout=1)
+        rss.assert_called_once()
+        collect.assert_not_called()
+
+    @staticmethod
+    def sample(stop):
+        stop.set()
+        return 200
