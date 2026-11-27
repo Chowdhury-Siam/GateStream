@@ -84,7 +84,8 @@ async def iter_media_chunks(client, message, offset, limit):
             async with aclosing(client.stream_media(message, offset=offset + received, limit=limit - received)) as stream:
                 while True:
                     try:
-                        chunk = await asyncio.wait_for(anext(stream), timeout=MEDIA_READ_TIMEOUT)
+                        async with asyncio.timeout(MEDIA_READ_TIMEOUT):
+                            chunk = await anext(stream)
                     except StopAsyncIteration:
                         break
                     received += 1
