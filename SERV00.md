@@ -1,273 +1,158 @@
-# GateStream on Serv00 / FreeBSD
+# GateStream 3.0.0 on Serv00 / FreeBSD
 
-GateStream v2.0.36 supports Python 3.11+ with a single asyncio HTTP/Telegram
-process. No root access, Docker, systemd, Bash, Linux `/proc`, or Linux allocator
-is required. The commands below describe Serv00; account limits and allowed
-long-running processes are determined by your current hosting plan.
+The Lite package includes a FreeBSD AMD64 binary. Run it as one application
+process with your existing MongoDB configuration and reserved HTTP port.
 
-## 1. SSH and executable permissions
+## SSH and execution permission
 
-Connect using the account and SSH hostname in your Serv00 welcome email:
+Use the SSH hostname and login from the hosting account's welcome message.
 
 ```sh
 ssh LOGIN@SSH_HOST
-```
-
-Enable execution of your own programs using DevilWEB → Additional services →
-Run your own applications, or:
-
-```sh
 devil binexec on
 ```
 
-Disconnect and reconnect SSH after changing Binexec. Use your existing account;
-`sudo`, package-manager changes, and privileged ports are unnecessary.
-
-## 2. Install or upgrade
-
-For a new installation:
+Binexec is also available under DevilWEB's additional services. Reconnect SSH
+after changing it. Extract the Lite ZIP into your chosen project directory.
+For an existing installation, follow `MIGRATION.md` first.
 
 ```sh
-cd ~
-git clone https://github.com/Chowdhury-Siam/GateStream.git
-python3.11 -m venv ~/.virtualenvs/gatestream
-. ~/.virtualenvs/gatestream/bin/activate
 cd ~/GateStream
-python -m pip install --upgrade pip
-python -m pip install --no-cache-dir -r requirements.txt
+chmod +x start.sh scripts/watchdog.sh bin/gatestream-*
 cp .env.example .env
 chmod 600 .env
 ```
 
-Use the provider's Python 3.11 executable if its command name differs. The POSIX
-`.` activation command also works in `sh`; `source` is equivalent in Bash.
-Dependencies already installed successfully do not need rebuilding unless their
-pinned version changed. This release adds `python-dotenv`.
+On an upgrade, copy the existing configuration instead of creating a fresh one.
+Keep the previous bot's `bot_main.session` and matching `worker_N.session` files
+for importing private-channel peer hashes. Go stores its native sessions under
+`sessions-go/`.
 
-For an upgrade, stop your running instance, preserve your existing `.env`,
-`config.env`/launcher if used, `bot_main.session*`, and `cache/`, then overlay the
-updated source and install requirements in the same virtual environment. Never
-replace your filled configuration with `.env.example`. No database migration,
-record deletion, token reset, or link regeneration is needed. Keep the same
-`DATABASE_URL`, `DATABASE_NAME`, `OMNI_MONGO_URI`, primary token and owner ID;
-the repair-session encryption key depends on the existing credentials.
+## Reserve the port
 
-## 3. Reserve a TCP port
-
-Use DevilWEB → Port reservation, or substitute your own available port below:
+Use DevilWEB's port reservation page or the provider's `devil` command.
 
 ```sh
 devil port add YOUR_PORT TCP GateStream
 devil port list
 ```
 
-Use an existing reservation if you already have one. Set the same port in `.env`
-and the website's proxy target. Serv00's documented reservation range is
-1024–64000; application validation also accepts other legal TCP ports for other
-hosts. The application never chooses a Serv00 port automatically.
+Reuse your existing reserved port. Set that value in `.env` and use the same
+value for the website's HTTP proxy target. The application validates the port
+before starting Telegram clients.
 
-## 4. Configure `.env` once
+## Configure the application
 
-Edit `~/GateStream/.env` with your editor. Supply the Telegram API ID/hash,
-primary BotFather token, positive `OWNER_ID`, reachable MongoDB URI, existing
-database name and storage channel. Example resource settings for the reported
-512 MiB RAM / 3 GiB disk account are below. Replace `YOUR_PORT` before starting:
+Fill in the API ID/hash, bot token, owner ID, storage channel, MongoDB URI and
+current database name. The following values are optional examples for a small
+hosting account. Replace the port and public URL with your own settings.
 
 ```dotenv
 BIND_ADDRESS=127.0.0.1
-PORT=YOUR_PORT
-BASE_URL=https://your-public-host.example
+PORT=YOUR_RESERVED_PORT
+BASE_URL=https://your-worker.example
 MULTI_BOT_TOKENS=""
 MEDIA_CACHE_MAX_MB=64
 CACHE_FREE_MB=128
 HANDLER_WORKERS=2
-IO_WORKERS=2
-MOTOR_MAX_WORKERS=2
+GO_MAX_PROCS=2
 MAX_TRANSMISSIONS=2
+MAX_HTTP_CONNECTIONS=8
 MEMORY_CLEAN_MB=350
 MEMORY_RESTART_MB=440
 ```
 
-These are optional tuning examples, not hardcoded platform defaults. With no
-extra tokens only the primary client is used. More bots increase connections,
-Telegram session overhead and memory; tune against your account's process and
-thread limits. Do not start multiple application processes for the same bot.
+Set the cache budget against the total account quota and allow room for the
+binaries, Go sessions, logs and backups. More Telegram workers add connections
+and memory use. Start with the primary bot and add workers according to measured
+use. These values are configuration examples.
 
-Configuration is resolved **per key**, in this order:
+System environment takes precedence over `.env`, followed by `config.env`,
+literal legacy launcher assignments and defaults. Empty exported values also
+have precedence. Commented examples are ignored. Configure the file once and
+restart after edits.
 
-1. System environment, including a value explicitly set to an empty string.
-2. `.env` in the working directory (normally the project directory).
-3. `config.env` in that same directory, for legacy deployments.
-4. Literal assignments / `export KEY=value` in `start.sh`, for legacy deployments.
-5. Application defaults.
-
-If none of those files exists in the working directory, the source project
-directory is used. Launch from the project as shown below. No parent-directory
-search and no automatic execution or sourcing of shell files occurs. Put active
-settings in `.env`; remove obsolete duplicate exports from your process manager
-when they should no longer override the file. You never need to export values
-manually before each start. Restart after editing configuration.
-
-Comments and empty lines are ignored. Duplicate keys within a file use the last
-assignment. `KEY=` and `KEY=""` explicitly set an empty value; bare `KEY` without
-`=` is not an assignment. Invalid assignments identify their filename and line,
-without displaying the line's contents. Single/double quotes, multiline quoted
-values, UTF-8 BOM, Unix LF and Windows CRLF are supported by python-dotenv's
-parser. Double quotes support dotenv escapes; single quotes preserve ordinary
-backslashes. An unquoted `#` starts a comment when preceded by whitespace:
-
-```dotenv
-# This PORT=7860 is documentation, not configuration.
-PORT=YOUR_PORT
-EXAMPLE_SECRET='spaces # hashes = equals $dollars ! punctuation'
-EXAMPLE_VALUE=abc#def=ghi
-```
-
-Values are not expanded as shell code or general `${VARIABLE}` templates. The
-legacy literal `${NAME:-fallback}` form is supported against the system
-environment. Shell command substitution and command chains in `start.sh` are
-ignored. Use literal values in `.env`. Percent-encode special characters in
-MongoDB usernames/passwords as required by MongoDB URI syntax.
-
-An empty required value (such as `PORT` or the primary token) causes a clear
-validation failure. Empty optional tokens disable extra workers, empty repair
-credentials disable the legacy override, and empty `BASE_URL`/cache paths choose
-automatic defaults. A zero media cache limit disables the cache. Negative
-limits are invalid. `MEMORY_RESTART_MB=0` disables memory-triggered restarts.
-
-Worker tokens accept commas, semicolons or whitespace. Duplicates, the primary
-token, malformed values and common placeholders are ignored. A syntactically
-valid token can still be revoked or invalid at Telegram: that worker is isolated,
-logged by number/error class, and skipped for media retrieval. Other workers and
-the primary continue. Fix its token and restart to reconnect it. Existing worker
-checks, slow repair, grants, sessions and database records are preserved.
-
-## 5. Start and verify
-
-After configuration, these are the only normal startup commands needed:
+## Start and verify
 
 ```sh
 cd ~/GateStream
-source ~/.virtualenvs/gatestream/bin/activate
-python -m bot
+./start.sh
 ```
 
-In a POSIX `sh` session replace `source` with `.`. Logs show the application
-version, OS/Python version, bind address/port, media cache limit, MongoDB ping result and
-connected/configured client counts. `HTTP server ready` appears only after the
-listener and ASGI startup succeed. Test from another SSH session:
+The launcher chooses `bin/gatestream-freebsd-amd64` on FreeBSD AMD64. It reads
+`.env` automatically. Logs show the effective bind address, port, connected
+MongoDB, configured and connected workers, cache limit and HTTP readiness.
+
+From a second SSH session, check the local HTTP endpoint with your reserved port.
 
 ```sh
-curl -f http://127.0.0.1:YOUR_PORT/health
+curl -fsS http://127.0.0.1:YOUR_RESERVED_PORT/health
+ps -ax -o pid,ppid,rss,command
 ```
 
-Expect `OK` and an `X-GateStream-Version` header with `curl -i`. The listener is
-reserved before Telegram startup; a port conflict/permission failure exits with
-a nonzero status and closes resources. Ctrl+C or `kill -TERM APP_PID` drains
-HTTP requests up to `SHUTDOWN_TIMEOUT` (default 20 seconds), stops background work and Telegram clients, flushes counters and closes MongoDB. Allow cleanup to
-finish before restarting. SIGKILL cannot perform cleanup. `/restart` and the
-memory guard run the same shutdown before replacing the process.
+Locate the GateStream process in the process list. RSS is in KiB. Compare memory
+with the same worker count and similar traffic. `/stats` reports Go runtime
+memory separately from hosting account RAM.
 
-## 6. Reverse proxy and SSL
+## Website proxy, SSL and Cloudflare
 
-Create a **Proxy** website in DevilWEB with your chosen hostname, target
-`127.0.0.1` (or the server-local address required by your panel) and your reserved
-TCP port. The application speaks plain HTTP to that proxy; do not enable HTTPS
-for the upstream target. Enable a certificate/HTTPS for the public website
-separately using SSL → WWW websites → Generate Let's Encrypt certificate, then
-enable force SSL when the certificate is ready. DNS must point to the account's
-web IP. An equivalent proxy creation example is:
+Create or edit a proxy website in DevilWEB. Its upstream should be plain HTTP
+at `127.0.0.1` and your reserved port. The example uses IPv4 loopback.
+A proxy targeting IPv6 loopback needs a matching bind address.
+
+The earlier deployment guide's proxy creation command is retained here.
 
 ```sh
 devil www add YOUR_DOMAIN proxy localhost YOUR_PORT
 ```
 
-Do not add a second website with the same hostname if one already exists; edit
-its proxy settings instead. If your proxy connects over IPv6, configure its target
-explicitly as IPv4 or adjust `BIND_ADDRESS` to match. Only expose a public bind
-address if the hosting setup requires it. `TRUSTED_PROXY_IPS` defaults to
-`127.0.0.1`; add a trusted proxy's actual address if necessary. Never trust
-forwarded headers from arbitrary clients on an exposed origin.
+Configure the domain's DNS to the hosting account's web IP. Generate the public
+certificate under SSL → WWW websites → Generate Let's Encrypt certificate, then
+force SSL after certificate activation.
 
-For an existing Cloudflare Worker, retain its routes and credentials. Set its
-origin to the **public HTTPS reverse-proxy address**, and set the bot's `BASE_URL`
-to the public Worker/custom domain used in file links. The Worker cannot reach
-Serv00's private loopback address. Preserve forwarding of `Range`, `If-Range`,
-`Content-Range`, `Content-Disposition` and anonymous download-group headers in
-your existing Worker. Check `/health`, a small single-file download and resuming it
-through the public domain. This GitHub package includes the Worker in `cloudflare/` and its deployment
-workflow in `.github/workflows/`. See [CLOUDFLARE.md](CLOUDFLARE.md) for deployment.
+Point the Cloudflare Worker's `ORIGIN_URL` to this public HTTPS proxy address.
+Set GateStream's `BASE_URL` to the Worker's public URL. Check `/health` through
+both the public origin and Worker before testing a download. The Worker streams
+ranges and forwards private sign-in and owner setup forms.
 
-## 7. Persistent operation and recovery
+The origin uses the actual TCP peer for local analytics fallback. The Worker
+supplies its stable anonymous grouping key. Authorization uses Telegram grants
+and browser sessions.
 
-Use only process persistence and Cron methods allowed for your account. No root
-service is required. With your virtual environment active, a basic background
-start is:
+## Persistent operation and recovery
 
-```sh
-cd ~/GateStream
-nohup python -m bot </dev/null >/dev/null 2>&1 &
-```
-
-Application logs still rotate in `event-log.txt` (2 MiB each, two backups).
-Record the process ID printed by your shell; stop that specific application with
-SIGTERM. Avoid broad `pkill python` commands on shared accounts.
-
-For automatic recovery where permitted, use the supplied watchdog **instead of**
-a separate manual/background instance. In `crontab -e`, insert one line with
-absolute paths (replace LOGIN and the actual home path):
+Use hosting-supported Cron to recover after a crash, subject to the provider's
+current usage rules. Replace the path with your actual application directory.
 
 ```cron
 */5 * * * * /bin/sh /usr/home/LOGIN/GateStream/scripts/watchdog.sh
 ```
 
-The launcher locates `.venv`, then `venv` in the project, then
-`~/.virtualenvs/gatestream`. For a different environment, set `GATESTREAM_PYTHON`
-to its absolute Python path in the Cron entry. The launcher replaces itself
-with the bot, which holds the project lock through graceful restarts. A
-duplicate Cron invocation exits immediately. After a crash, the next Cron
-invocation can start the app again. Disable the Cron entry before intentionally
-stopping the application and send SIGTERM to the `python -m bot` process.
-Review startup failures in `event-log.txt`.
+The launcher uses `exec` and the Go process holds `.watchdog.lock`. Duplicate
+Cron launches exit, and graceful restarts retain the lock and process ID.
+After an exit, the next allowed Cron invocation can restart the application.
 
-To check the app's own memory on FreeBSD, use
-`ps -ax -o pid,ppid,rss,command` and find `python -m bot`. RSS is reported in
-KiB. Compare readings with the same number of workers and similar traffic.
+Disable that Cron entry before intentionally stopping the app. Find the actual
+PID with `ps`, then send SIGTERM to that numeric PID. Ctrl+C works in foreground.
+The server drains HTTP handlers, cancels reads and repair tasks, checkpoints
+statistics and disconnects Telegram and MongoDB.
 
-## 8. Limits and troubleshooting
-
-Keep the media cache below the remaining account quota after accounting for
-the virtual environment, source files, sessions, logs and other applications.
-Shared filesystem space can differ from the account quota. If a cache write
-fails with `EDQUOT` or `ENOSPC`, GateStream can still stream the source directly.
+## Troubleshooting
 
 | Symptom | Check |
 | --- | --- |
-| Bind `operation not permitted` / Errno 1 | `devil port list`; configured/reserved port must match. Check Binexec and reconnect SSH. Startup logs show the effective port. |
-| Port stays at an old value | A system variable/process-manager export has priority; remove/update it once. Comments cannot supply values. Check duplicate active assignments. |
-| Address already in use | Stop the previous instance gracefully; avoid simultaneous watchdog and manual launches. |
-| Proxy 502 | Local `/health`, target port/address, app readiness; upstream must use HTTP, public SSL is separate. |
-| `ACCESS_TOKEN_INVALID` | Replace that worker's actual BotFather token; blank `MULTI_BOT_TOKENS` disables extras. No commented sample is loaded. |
-| No-plugin warning on an old deployment | Upgrade the whole source. Active plugins use Hydrogram class decorators and explicit discovery, with commands/callbacks registered once. |
-| `No space left` / `Disc quota exceeded` | Check account quota in the panel, reduce the media cache, remove unused files when the bot is stopped; shared disk free is not account quota. |
-| Compiler/TgCrypto/cryptography installation errors | Verify Binexec and virtualenv Python; use provider-supported build tools. Already installed extensions need no OS replacement. |
-| Too many processes/threads / memory kill | Reduce extra workers, HTTP demand, IO/Motor/handler workers and transmission concurrency; leave RAM margin for the host. |
-| Shutdown executor error | Use `python -m bot` from this release, allow SIGTERM cleanup; do not embed the old `idle()`/manual loop launcher. |
-| MongoDB connection fails | Check the existing URI, DNS, allowlist, reachable port and TLS; do not rename or recreate your database to fix connectivity. |
+| Permission denied while executing | Enable Binexec, reconnect SSH, and make the launcher and binary executable. |
+| Bind operation not permitted | Confirm the configured port appears in `devil port list`. Read the effective bind address/port in the startup error. |
+| Port already in use | Inspect the running PID and stop the earlier instance gracefully before launching the new one. |
+| Invalid configuration | Read the named setting in the validation error. Check system environment overrides and active duplicate assignments. |
+| Worker authentication failure | Check that worker's token. Empty `MULTI_BOT_TOKENS` disables extras. Connected workers continue serving. |
+| Channel unavailable on an old link | Preserve each matching `.session` peer table. Check the downloading bot's channel membership and use `/workers`. |
+| Commands fail to arrive | Check group privacy/administrator permissions, the `/filetolink` binding, and conflicting Bot API webhook or polling installations. |
+| Proxy 502 | Check local `/health`, proxy address and reserved port. Public SSL terminates at the hosting proxy. |
+| Disk quota exceeded | Lower the media cache limit and use `/clean`. Check backups, old source copies and other account files. Cache write failures fall back to Telegram reads. |
+| Exec format error | Check `uname -s` and `uname -m`. Select the matching binary or cross-compile on a development machine. |
+| Build runs out of memory | Use the supplied binary. Compile the generated MTProto SDK on a machine with sufficient RAM. |
 
-## References and verification
-
-Provider instructions were checked against the official documentation:
-[Binexec](https://docs.serv00.com/Binexec/),
-[Python](https://docs.serv00.com/Python/),
-[ports](https://docs.serv00.com/Port_reservation/),
-[proxy websites](https://docs.serv00.com/WWW/),
-[SSL](https://docs.serv00.com/SSL/) and [Cron](https://docs.serv00.com/Cron/).
-Parser grammar: [python-dotenv](https://bbc2.github.io/python-dotenv/).
-
-Run regression tests with `python -m unittest discover -s tests -v`. Tests use
-fake Telegram/MongoDB services and real local HTTP listeners for signal shutdown.
-FreeBSD allocator/accounting paths and quota errors are simulated in unit tests;
-actual Serv00 credentials, live Telegram recovery, public proxy performance and
-account-specific limits must be verified on the deployment. This release was
-built and tested on Linux, not an actual FreeBSD host.
+FreeBSD binary compilation is checked from Linux. Live Telegram recovery,
+provider process accounting and real Serv00 performance require verification on
+the deployed account. Provider settings and restrictions remain authoritative.
