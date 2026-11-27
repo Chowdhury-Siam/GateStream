@@ -1,74 +1,20 @@
 import asyncio
 import time
-from collections import OrderedDict, deque
+from collections import OrderedDict
 from contextlib import aclosing
 from hydrogram import Client
+from hydrogram.errors import FloodWait
 from hydrogram.types import Message
 from datetime import datetime
 from mimetypes import guess_type
-from bot.clients import TelegramBot, get_worker_client, mark_worker_cooldown
-
-try:
-    from hydrogram.errors import FloodWait
-except ImportError:
-    try:
-        from pyrogram.errors import FloodWait
-    except ImportError:
-        FloodWait = Exception
+from bot.clients import TelegramBot, get_worker_client, mark_worker_cooldown, worker_clients
+from bot.modules.static import format_duration
 
 # Fast in-memory LRU cache for channel file messages (eliminates Telegram round-trips on seek/range requests)
 _MESSAGE_CACHE: OrderedDict[tuple, tuple[Message, float]] = OrderedDict()
 _CACHE_MAX_SIZE = 80
 _CACHE_TTL = 3600  # 1 hour
 MEDIA_READ_TIMEOUT = 18.0
-
-
-async def iter_parallel_ranges(read, start, count):
-    """Overlap four continuous four-chunk reads, with a bounded ordered buffer."""
-    pending = deque()
-    end = start + count
-
-    def schedule(first):
-        size = min(4, end - first)
-        queue = asyncio.Queue(maxsize=size + 1)
-
-        async def fill():
-            try:
-                async with aclosing(read(first, size)) as stream:
-                    async for chunk in stream:
-                        await queue.put(chunk)
-            except Exception as error:
-                await queue.put(error)
-            else:
-                await queue.put(None)
-
-        pending.append((asyncio.create_task(fill()), queue))
-        return first + size
-
-    next_start = start
-    try:
-        while len(pending) < 4 and next_start < end:
-            next_start = schedule(next_start)
-        while pending:
-            task, queue = pending[0]
-            while True:
-                chunk = await queue.get()
-                if chunk is None:
-                    break
-                if isinstance(chunk, Exception):
-                    raise chunk
-                yield chunk
-            await task
-            pending.popleft()
-            if next_start < end:
-                next_start = schedule(next_start)
-    finally:
-        tasks = [task for task, _ in pending]
-        for task in tasks:
-            if not task.done():
-                task.cancel()
-        if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
 
 
 async def iter_media_chunks(client, message, offset, limit):
@@ -124,11 +70,18 @@ def invalidate_message_cache(chat_id: int | str = None, message_id: int = None):
     for k in keys_to_remove:
         _MESSAGE_CACHE.pop(k, None)
 
+def clear_message_caches():
+    _MESSAGE_CACHE.clear()
+    # The pinned Hydrogram SDK stores parsed messages separately from our LRU.
+    for client in worker_clients or (TelegramBot,):
+        client.message_cache.store.clear()
+
+
 async def get_message(chat_id: int | str, message_id: int, client: Client = None, force_refresh: bool = False, allow_fallback: bool = True) -> Message | None:
     target_client = client or get_worker_client() or TelegramBot
     client_name = getattr(target_client, 'name', 'bot')
     cache_key = (client_name, chat_id, message_id)
-    now = time.time()
+    now = time.monotonic()
 
     if force_refresh:
         _MESSAGE_CACHE.pop(cache_key, None)
@@ -143,7 +96,7 @@ async def get_message(chat_id: int | str, message_id: int, client: Client = None
     message = None
 
     try:
-        message = await asyncio.wait_for(target_client.get_messages(chat_id=chat_id, message_ids=message_id), timeout=8.0)
+        message = await asyncio.wait_for(target_client.get_messages(chat_id=chat_id, message_ids=message_id, replies=0), timeout=8.0)
         if message and message.empty:
             message = None
     except Exception as e:
@@ -152,7 +105,7 @@ async def get_message(chat_id: int | str, message_id: int, client: Client = None
         # If worker client does not have peer in memory, resolve chat and retry get_messages
         try:
             await asyncio.wait_for(target_client.get_chat(chat_id), timeout=8.0)
-            message = await asyncio.wait_for(target_client.get_messages(chat_id=chat_id, message_ids=message_id), timeout=8.0)
+            message = await asyncio.wait_for(target_client.get_messages(chat_id=chat_id, message_ids=message_id, replies=0), timeout=8.0)
             if message and message.empty:
                 message = None
         except Exception:
@@ -164,16 +117,17 @@ async def get_message(chat_id: int | str, message_id: int, client: Client = None
                 target_client = TelegramBot
                 client_name = getattr(target_client, 'name', 'bot')
                 cache_key = (client_name, chat_id, message_id)
-                message = await asyncio.wait_for(TelegramBot.get_messages(chat_id=chat_id, message_ids=message_id), timeout=8.0)
+                message = await asyncio.wait_for(TelegramBot.get_messages(chat_id=chat_id, message_ids=message_id, replies=0), timeout=8.0)
                 if message and message.empty:
                     message = None
             except Exception:
                 message = None
 
     if message:
-        if len(_MESSAGE_CACHE) >= _CACHE_MAX_SIZE:
+        _MESSAGE_CACHE[cache_key] = (message, time.monotonic())
+        _MESSAGE_CACHE.move_to_end(cache_key)
+        if len(_MESSAGE_CACHE) > _CACHE_MAX_SIZE:
             _MESSAGE_CACHE.popitem(last=False)
-        _MESSAGE_CACHE[cache_key] = (message, now)
 
     return message
 
@@ -182,8 +136,6 @@ def is_media_message(msg: Message) -> bool:
         return False
     attributes = ('document', 'video', 'audio', 'voice', 'photo', 'video_note')
     return any(getattr(msg, attr, None) is not None for attr in attributes)
-
-from bot.modules.static import format_duration
 
 def resolve_file_mime(file_name: str | None, mime_type: str | None) -> str:
     name = (file_name or '').lower()
