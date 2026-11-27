@@ -8,7 +8,6 @@ from contextlib import suppress
 from dataclasses import dataclass
 from secrets import token_bytes
 
-from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from hydrogram import Client, raw
 from hydrogram.errors import FloodWait, PasswordHashInvalid, PhoneCodeInvalid, SessionPasswordNeeded
 
@@ -23,6 +22,8 @@ def _owner_key():
 
 
 def _cipher():
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
     context = f'GateStream worker repair v1:{Telegram.OWNER_ID}'.encode()
     return AESGCM(hmac.digest(Telegram.BOT_TOKEN.encode(), context, 'sha256'))
 
