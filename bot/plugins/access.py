@@ -1,7 +1,6 @@
 from hydrogram import Client
 from hydrogram import enums, filters
 
-from bot.clients import TelegramBot
 from bot.config import Telegram
 from bot.modules.access import forum_topic, group_id, set_access, set_file_topic
 from bot.modules.decorators import verify_admin
@@ -57,5 +56,5 @@ async def file_to_link_command(_, message):
         await set_file_topic(topic)
     except Exception:
         return await message.reply('Could not save the File To Link topic. Try again shortly.', quote=True)
-    await message.reply('File To Link is active in this topic. Authorized members can post files for automatic links or use /index to make a ZIP.',
+    await message.reply('File To Link is active in this topic. Authorized members can post files for automatic links.',
                         quote=True, parse_mode=enums.ParseMode.DISABLED)
