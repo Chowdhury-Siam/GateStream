@@ -519,7 +519,7 @@ func TestMediaPoolsKeepPrimaryAuthorizationInItsOwnDC(t *testing.T) {
 
 func TestLegacyNestedBSONRecordsRemainMaps(t *testing.T) {
 	if !storedBSONOptions.DefaultDocumentM {
-		t.Fatal("MongoDB client is not configured for Python-compatible nested maps")
+		t.Fatal("MongoDB client is not configured for legacy-compatible nested maps")
 	}
 	raw, err := bson.Marshal(bson.M{"phases": bson.M{"media": bson.M{"bytes": int64(42), "single_downloads": int64(3), "zip_downloads": int64(2)}}, "episodes": bson.A{bson.M{"code": "old-episode"}}})
 	if err != nil {
