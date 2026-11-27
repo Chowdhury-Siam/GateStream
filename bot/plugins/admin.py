@@ -1,11 +1,9 @@
 from hydrogram import Client
-import os
-import sys
 import io
 import asyncio
 from hydrogram import filters
+from hydrogram.errors import FloodWait
 from hydrogram.types import Message
-from bot.clients import TelegramBot
 from bot.modules.decorators import verify_user, verify_admin
 from bot.config import PROJECT_ROOT
 from bot.modules.lifecycle import request_restart
@@ -26,14 +24,6 @@ async def restart_command(_, msg: Message):
         pass
 
     request_restart()
-
-try:
-    from hydrogram.errors import FloodWait
-except ImportError:
-    try:
-        from pyrogram.errors import FloodWait
-    except ImportError:
-        FloodWait = Exception
 
 @Client.on_message(filters.command(['purge', 'clear']) & (filters.private | filters.group))
 @verify_user
@@ -151,15 +141,12 @@ async def clean_memory_command(_, msg: Message):
     """Manually cleans memory, runs cyclic garbage collection and releases freed heap back to OS."""
     from bot.modules.memory import flush_ram, get_current_ram_mb
     from bot.modules.cache import clear_media_cache
-    try:
-        from bot.modules.telegram import _MESSAGE_CACHE
-        _MESSAGE_CACHE.clear()
-    except Exception:
-        pass
+    from bot.modules.telegram import clear_message_caches
 
     before_ram_mb = get_current_ram_mb()
+    clear_message_caches()
+    removed = clear_media_cache()
     flush_ram()
-    clear_media_cache()
     after_ram_mb = get_current_ram_mb()
 
     freed_mb = max(0.0, before_ram_mb - after_ram_mb)
@@ -168,7 +155,7 @@ async def clean_memory_command(_, msg: Message):
         f"🧹 **System Cleaned & Memory Compacted!**\n\n"
         f"📉 **Freed RAM:** `{freed_mb:.1f} MB`\n"
         f"🧠 **Current Process RAM:** `{after_ram_mb:.1f} MB`\n"
-        f"💾 **SSD Head/Tail Media Cache:** Purged cleanly",
+        f"💾 **Cached media chunks removed:** {removed}",
         quote=True
     )
 
