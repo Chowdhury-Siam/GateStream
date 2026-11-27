@@ -1,4 +1,5 @@
 import asyncio
+import time
 from hydrogram import Client, enums
 from hydrogram.errors import AccessTokenExpired, AccessTokenInvalid
 from logging import getLogger
@@ -20,12 +21,14 @@ TelegramBot = Client(
     parse_mode=enums.ParseMode.MARKDOWN,
     # Explicit imports keep retired plugins from loading after an overlay upgrade.
     plugins=dict(root='bot.plugins', include=[
-        'access', 'admin', 'callback', 'commands', 'files', 'link', 'personal_index',
+        'access', 'admin', 'callback', 'commands', 'files', 'link', 'library',
     ]),
     sleep_threshold=-1,
     max_concurrent_transmissions=Resources.MAX_TRANSMISSIONS,
     ipv6=False
 )
+# Hydrogram otherwise retains up to 10,000 complete message objects per client.
+TelegramBot.message_cache.capacity = 512
 install_forum_parser(TelegramBot)
 
 # Multi-Client Worker Pool (Used for fast parallel chunk downloading and streaming)
@@ -37,7 +40,6 @@ HEARTBEAT_PINGS_COUNT = 0
 
 def record_heartbeat_ping():
     global LAST_HEARTBEAT_TIME, HEARTBEAT_PINGS_COUNT
-    import time
     LAST_HEARTBEAT_TIME = time.time()
     HEARTBEAT_PINGS_COUNT += 1
 
@@ -66,6 +68,7 @@ def init_worker_clients():
                 no_updates=True,
                 ipv6=False
             )
+            worker.message_cache.capacity = 128
             worker_clients.append(worker)
         
     _worker_cycler = cycle(worker_clients)
@@ -75,39 +78,25 @@ _worker_cooldowns: dict[str, float] = {}
 
 def mark_worker_cooldown(worker_name: str, duration: float):
     """Temporarily marks a worker bot on cooldown if rate-limited by Telegram."""
-    import time
-    _worker_cooldowns[worker_name] = time.time() + duration
+    _worker_cooldowns[worker_name] = time.monotonic() + duration
     logger.warning("Worker %s cooling down for %.1fs after a media read failure or Telegram limit.", worker_name, duration)
 
 def get_worker_client() -> Client:
     """Returns the next healthy worker client from the pool, skipping any currently on cooldown."""
     global _worker_cycler
-    if not worker_clients:
+    if len(worker_clients) <= 1:
         return TelegramBot
 
-    import time
-    now = time.time()
-    # Filter healthy clients (cooldown expired or not set)
-    healthy_workers = [
-        w for w in worker_clients
-        if w.is_connected and w.me and not getattr(w, '_gatestream_closed', False)
-        and now >= _worker_cooldowns.get(getattr(w, 'name', ''), 0)
-    ]
-
-    # If all auxiliary workers are on cooldown, fall back to TelegramBot
-    if not healthy_workers:
-        return TelegramBot
-
-    # Cycle among currently healthy workers
     if _worker_cycler is None:
         _worker_cycler = cycle(worker_clients)
-
-    for _ in range(len(worker_clients)):
+    now = time.monotonic()
+    for _ in worker_clients:
         candidate = next(_worker_cycler)
-        if candidate in healthy_workers:
+        if (candidate.is_connected and candidate.me and not getattr(candidate, '_gatestream_closed', False)
+                and now >= _worker_cooldowns.get(candidate.name, 0)):
             return candidate
+    return TelegramBot
 
-    return healthy_workers[0]
 
 async def start_all_clients():
     # Connect MongoDB
@@ -119,8 +108,6 @@ async def start_all_clients():
         logger.error('MongoDB connection failed (%s).', type(error).__name__)
         raise
     logger.info('MongoDB connection verified.')
-    from bot.modules.activity_store import activity_store
-    await activity_store.flush()
     
     # Start Main Bot
     logger.info("Starting Main Telegram Bot...")
@@ -151,10 +138,6 @@ async def start_all_clients():
                 logger.warning('Worker #%d authentication failed. Check its configured token.', idx)
     connected = sum(bool(client.is_connected and client.me) for client in worker_clients)
     logger.info('Worker clients connected: %d/%d (including primary).', connected, len(worker_clients))
-
-def get_all_worker_clients() -> list[Client]:
-    """Returns a list of all active worker clients (including TelegramBot as worker 0)."""
-    return list(worker_clients)
 
 async def close_client(client, *, idempotent=True):
     if idempotent and getattr(client, '_gatestream_closed', False):
@@ -208,7 +191,6 @@ async def stop_all_clients():
 
 async def notify_restart():
     import os
-    import time
     if (PROJECT_ROOT / '.restart_state.txt').exists():
         try:
             with open(PROJECT_ROOT / '.restart_state.txt', 'r') as f:
