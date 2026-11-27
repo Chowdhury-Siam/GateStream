@@ -1,0 +1,93 @@
+name: Publish GateStream binaries
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gatestream-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: ${{ !github.event.deleted }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      commit: ${{ steps.build.outputs.commit }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: Build and verify release assets
+        id: build
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+          CGO_ENABLED: '0'
+          GOARCH: amd64
+        run: |
+          mkdir -p bin
+          GOOS=linux go build -buildvcs=false -trimpath -ldflags='-s -w' -o bin/gatestream-linux-amd64 .
+          version=$(bin/gatestream-linux-amd64 --version)
+          if [[ "$version" != "GateStream ${RELEASE_TAG#v}" ]]; then
+            printf 'Tag %s does not match the binary version %s\n' "$RELEASE_TAG" "$version" >&2
+            exit 1
+          fi
+          GOOS=freebsd go build -buildvcs=false -trimpath -ldflags='-s -w' -o bin/gatestream-freebsd-amd64 .
+          (cd bin && sha256sum gatestream-linux-amd64 gatestream-freebsd-amd64 > SHA256SUMS)
+          /bin/sh scripts/check-release.sh
+          printf 'commit=%s\n' "$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gatestream-release-binaries
+          compression-level: 0
+          if-no-files-found: error
+          path: |
+            bin/gatestream-linux-amd64
+            bin/gatestream-freebsd-amd64
+            bin/SHA256SUMS
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: gatestream-release-binaries
+          path: dist
+      - name: Publish a new release
+        working-directory: dist
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          BUILD_COMMIT: ${{ needs.build.outputs.commit }}
+        run: |
+          if draft=$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft); then
+            if [[ "$draft" == true ]]; then
+              printf 'Draft %s already exists. Review it before retrying this release.\n' "$RELEASE_TAG" >&2
+              exit 1
+            fi
+            printf 'Release %s already exists. Leaving it untouched.\n' "$RELEASE_TAG"
+            exit 0
+          fi
+          tag_commit=$(gh api "repos/$GH_REPO/commits/$RELEASE_TAG" --jq .sha)
+          if [[ "$tag_commit" != "$BUILD_COMMIT" ]]; then
+            printf 'Tag %s no longer points to the built commit.\n' "$RELEASE_TAG" >&2
+            exit 1
+          fi
+          sha256sum -c SHA256SUMS
+          gh release create "$RELEASE_TAG" --verify-tag --generate-notes --draft \
+            --title "GateStream $RELEASE_TAG" \
+            gatestream-linux-amd64 gatestream-freebsd-amd64 SHA256SUMS
+          gh release edit "$RELEASE_TAG" --draft=false --verify-tag
