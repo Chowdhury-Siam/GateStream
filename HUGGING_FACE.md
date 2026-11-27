@@ -32,7 +32,7 @@ The Space does not include a database or external gateway provisioning.
 3. Choose **Public** if stream/download URLs should work for anyone with the link.
    A private Space requires Hugging Face access and can prevent playback in
    external players.
-4. Extract `GateStream-HuggingFace.zip` on your computer.
+4. Extract the project package on your computer. Retain your Space README metadata.
 5. Upload the extracted contents to the Space's **Files** tab and commit them.
    `README.md`, `Dockerfile`, `requirements.txt`, and the `bot/` folder must be at
    the repository root. Do not upload just the ZIP or place everything inside an
@@ -129,44 +129,6 @@ The Space must be permitted to run: source updates do not clear a paused
 When the owner links a channel post with `/link`, GateStream can classify its
 title with AniList and the optional `MAL_CLIENT_ID` and `OMDB_API_KEY` settings.
 
-## Immediate and parallel ZIP downloads (2.0.6)
-
-**Start immediately** now supports multiple download-manager connections and
-resume. One ZIP fills on disk in the background, while clients start receiving
-its available bytes. Every connection reads that same archive, with stable
-ETags and HTTP byte ranges. Telegram is fetched once per selected file, not once
-per client connection. Later ranges wait until their bytes have been built;
-additional connections cannot bypass Telegram throughput. Waiting connections
-may need a retry if the client or proxy times them out.
-
-Version 2.0.6 overlaps four continuous 4 MiB Telegram ranges per ZIP source,
-with ordered bounded buffers and retry from the last complete chunk of a
-stalled range. It avoids reopening a Telegram stream for every MiB and skips
-unnecessary detached head/tail prefetch for ZIPs. Source buffering stays around
-16–20 MiB per builder. The page now shows ZIP buffer percentage and fill rate,
-which helps distinguish slow source delivery from client/proxy download limits.
-Constant throughput still depends on Telegram and the host/network. Real-host
-throughput must be checked after deployment; local latency simulations do not
-predict an exact production speed.
-
-New ZIP downloads start immediately. Four download-manager connections can be
-a starting point. Host, proxy, and network limits still affect speed.
-
-ZIP links last 24 hours. Keep the default `ZIP_CACHE_MAX_MB=8192` (8 GiB shared
-disk budget) or set a size that fits your Space's available disk. ZIPs that
-exceed the available cache stream directly with one connection and no resume. `ZIP_CACHE_DIR` can point to an existing
-persistent volume if your hosting provides one. The default directory is
-`cache/archives`; do not upload its contents. Up to two live ZIP builds can run at a time.
-Expired ZIPs and interrupted partial files are cleaned when new selections are
-made. Unexpired ZIPs stay available for resume instead of being evicted.
-
-Normal process restarts retain resume if the completed file survives. Rebuilds
-that clear temporary storage require a new selection; missing archives return
-410 and are never silently regenerated for an existing partial download. Changing
-the Link password still invalidates protected ZIP links. Upload the updated
-source, restart the Space and select files again. `/health` should report
-`X-GateStream-Version: 2.0.7`.
-
 ## Dashboard totals after a restart
 
 Cumulative transfer totals are checkpointed in your external MongoDB database
@@ -177,22 +139,3 @@ is required for these statistics. A hard kill can lose the most recent unsaved
 interval; database failures are reported on the dashboard. Earlier unsaved
 counts cannot be recovered, except existing media bytes in the legacy bandwidth
 record where available.
-
-## v2.0.9 — v2.0.7 base without Drive integration
-
-The Library and Private links pages retain custom ZIP names; type only the name
-and `.zip` is added automatically. Resume, multiple connections, parallel source
-reads, compact controls and persistent single-file/ZIP totals remain available.
-
-Google Drive transfer commands, OAuth credential handling, dependencies,
-configuration and Bhadoo index buttons have been removed. The v2.0.8 settings
-menu is not included. Deploy a clean source tree, or remove retired files as
-listed in README's upgrade instructions. An explicit plugin list also prevents
-old Drive/settings plugins from being loaded if an overlay upload leaves them.
-Do not change existing database names, MongoDB settings or Telegram session
-files. Existing stored catalog records, totals and Link password are preserved.
-
-Source changes cannot lift an account suspension. This package still performs
-Telegram streaming and downloads; host approval is required for that workload.
-The health response reports `X-GateStream-Version: 2.0.9`. The existing HF README
-metadata is preserved.
