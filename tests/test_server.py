@@ -81,7 +81,7 @@ class ServerTests(unittest.IsolatedAsyncioTestCase):
                 with patch.multiple(main, get_file=AsyncMock(return_value=doc),
                                     get_message=AsyncMock(return_value=message),
                                     get_cached_chunk=AsyncMock(return_value=b'PK1234'),
-                                    is_chunk_cached=lambda *_: True, add_bandwidth_bytes=AsyncMock()):
+                                    is_chunk_cached=lambda *_: True):
                     client = instance.test_client()
                     head = await client.head('/dl/file')
                     full = await client.get('/dl/file')
@@ -142,8 +142,7 @@ class TelegramReplyTests(unittest.IsolatedAsyncioTestCase):
                 )
                 properties = ('Movie.mp4' if video else 'Book.pdf', 1024, 'video/mp4' if video else 'application/pdf', 65 if video else 0, '01:05' if video else 'N/A')
                 with patch.object(self.files.Telegram, 'CHANNEL_ID', -1001234567890):
-                    with patch.object(self.files, 'get_file_properties', return_value=properties), \
-                         patch.object(self.files.library, 'active_folder', AsyncMock(return_value=None)):
+                    with patch.object(self.files, 'get_file_properties', return_value=properties):
                         with patch.object(self.files, 'save_file', AsyncMock(return_value={'code': 'test-code'})):
                             await self.files.handle_user_file.__wrapped__(None, message)
                 caption = status.edit_text.call_args.kwargs['text']
@@ -187,7 +186,7 @@ class RetiredPluginTests(unittest.TestCase):
                     clients.TelegramBot.load_plugins()
             finally:
                 os.chdir(previous)
-        self.assertIn('bot.plugins.personal_index', imported)
+        self.assertIn('bot.plugins.library', imported)
         self.assertTrue({f'bot.plugins.{plugin}' for plugin in retired}.isdisjoint(imported))
 
 
@@ -229,16 +228,15 @@ class ActivityEndpointTests(unittest.IsolatedAsyncioTestCase):
         doc = dict(file_name='file.mp4', file_size=6, mime_type='video/mp4', channel_id=1, message_id=2)
         with patch.object(main, 'activity', activity), patch.object(main, 'get_file', AsyncMock(return_value=doc)):
             with patch.object(main, 'get_cached_chunk', AsyncMock(return_value=b'abcdef')), patch.object(main, 'is_chunk_cached', return_value=True):
-                with patch.object(main, 'add_bandwidth_bytes', AsyncMock()):
-                    # Inspect ASGI headers directly: Quart's buffered test response rewrites empty HEAD bodies to length zero.
-                    async with instance.test_client().request('/dl/private-code', method='HEAD') as head:
-                        await head.send(b'')
-                        await head.send_complete()
-                    self.assertEqual(head.headers['Content-Length'], '6')
-                    self.assertEqual(activity.snapshot()['phases']['media']['bytes'], 0)
-                    response = await instance.test_client().get('/dl/private-code', headers={'Range': 'bytes=1-3'})
-                    self.assertEqual(response.status_code, 206)
-                    self.assertEqual(await response.get_data(), b'bcd')
+                # Inspect ASGI headers directly: Quart's buffered test response rewrites empty HEAD bodies to length zero.
+                async with instance.test_client().request('/dl/private-code', method='HEAD') as head:
+                    await head.send(b'')
+                    await head.send_complete()
+                self.assertEqual(head.headers['Content-Length'], '6')
+                self.assertEqual(activity.snapshot()['phases']['media']['bytes'], 0)
+                response = await instance.test_client().get('/dl/private-code', headers={'Range': 'bytes=1-3'})
+                self.assertEqual(response.status_code, 206)
+                self.assertEqual(await response.get_data(), b'bcd')
         phase = activity.snapshot()['phases']['media']
         self.assertEqual((phase['bytes'],phase['completed'],phase['active']), (3,1,0))
 
@@ -251,7 +249,7 @@ class ActivityEndpointTests(unittest.IsolatedAsyncioTestCase):
         doc = dict(file_name='file.mp4',file_size=6,mime_type='video/mp4',channel_id=1,message_id=2)
         with patch.object(main,'activity',tracker), patch.object(main,'get_file',AsyncMock(return_value=doc)), \
              patch.object(main,'get_cached_chunk',AsyncMock(return_value=b'abcdef')), \
-             patch.object(main,'is_chunk_cached',return_value=True),patch.object(main,'add_bandwidth_bytes',AsyncMock()):
+             patch.object(main,'is_chunk_cached',return_value=True):
             client=instance.test_client()
             await client.head('/dl/file')
             await client.get('/dl/file?stream=1')
@@ -259,4 +257,4 @@ class ActivityEndpointTests(unittest.IsolatedAsyncioTestCase):
             for value in ['bytes=0-2','bytes=0-0','bytes=3-999']:
                 await client.get('/dl/file',headers={'Range':value})
             self.assertEqual(tracker.snapshot()['phases']['media']['single_downloads'],1)
-            self.assertEqual(tracker.snapshot()['phases']['media']['zip_downloads'],0)
+            self.assertNotIn('zip_downloads', tracker.snapshot()['phases']['media'])
