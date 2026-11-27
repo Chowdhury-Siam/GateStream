@@ -63,7 +63,6 @@ async def main():
     from bot.database import db
     from bot.server import server
     from bot.modules.activity_store import activity_store
-    from bot.modules.archive_cache import archive_cache
     from bot.modules.memory import monitor_memory
     from bot.modules.worker_setup import setup
 
@@ -78,8 +77,8 @@ async def main():
         except (ValueError, OSError):
             pass
     logger.info('GateStream %s | %s %s | Python %s', version, platform.system(), platform.release(), platform.python_version())
-    logger.info('HTTP configured: %s:%d | ZIP cache: %d MiB | Configured bot clients: %d',
-                Server.BIND_ADDRESS, Server.PORT, Resources.ZIP_CACHE_MAX_MB, len(Telegram.WORKER_TOKENS))
+    logger.info('HTTP configured: %s:%d | Media cache: %d MiB | Configured bot clients: %d',
+                Server.BIND_ADDRESS, Server.PORT, Resources.MEDIA_CACHE_MAX_MB, len(Telegram.WORKER_TOKENS))
     if Telegram.IGNORED_WORKER_TOKENS:
         logger.warning('Ignored %d blank, placeholder, or malformed worker entries.', Telegram.IGNORED_WORKER_TOKENS)
     listener = None
@@ -123,7 +122,7 @@ async def main():
         stop_task.cancel()
         await asyncio.gather(stop_task, return_exceptions=True)
         # Each resource gets a cleanup attempt even if another resource fails.
-        for cleanup in (lifecycle.close, setup.close, archive_cache.close, activity_store.flush, clients.stop_all_clients):
+        for cleanup in (lifecycle.close, setup.close, activity_store.flush, clients.stop_all_clients):
             try:
                 async with asyncio.timeout(Server.SHUTDOWN_TIMEOUT):
                     await cleanup()
