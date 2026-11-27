@@ -15,8 +15,7 @@ logger = logging.getLogger('bot')
 
 async def register_commands(client):
     common = [BotCommand('start', 'Open GateStream'), BotCommand('help', 'Show the menu')]
-    private = [*common, BotCommand('index', 'Start or finish a ZIP folder'),
-               BotCommand('catalog', 'Open your personal library')]
+    private = [*common, BotCommand('catalog', 'Open your personal library')]
     owner = [*private, BotCommand('auth', 'Authorize a user or group'),
              BotCommand('unauth', 'Remove authorization'), BotCommand('stats', 'View server statistics'),
              BotCommand('workers', 'Test worker posting in the log'),
@@ -40,9 +39,7 @@ async def send_menu(message, user_id):
     buttons = []
     if topic_status == 'active':
         upload = 'Post a file in this topic' if in_group else 'Send me a file'
-        text += (f'{upload} to get a download link.\n'
-                 'Use Index to collect files into one ZIP. Send /index My folder to finish with a custom name.')
-        buttons.append([InlineKeyboardButton('Index', callback_data='menu:index')])
+        text += f'{upload} to get a download link.'
     elif owner:
         text += {
             'no_topic': 'Telegram did not identify a forum topic for this message. Open File To Link and send /filetolink as a new message.',
@@ -55,8 +52,8 @@ async def send_menu(message, user_id):
     if in_group:
         text += '\nPersonal library sign-in requires a user grant.'
     else:
-        text += '\nUse Library to view your saved files and ZIP folders.'
-        buttons[0].append(InlineKeyboardButton('Library', callback_data='menu:library'))
+        text += '\nUse Library to view your saved files.'
+        buttons.append([InlineKeyboardButton('Library', callback_data='menu:library')])
     buttons.append([InlineKeyboardButton('My ID', callback_data='menu:id')])
     if owner:
         buttons[-1].append(InlineKeyboardButton('Manage access', callback_data='menu:access'))
