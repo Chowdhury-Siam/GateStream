@@ -1,8 +1,10 @@
 .git
-.env
+.env*
 config.env
 *.session*
 sessions-go
 cache
 event-log.txt*
+.watchdog.lock
 bin
+*.zip
