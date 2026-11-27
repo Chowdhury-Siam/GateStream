@@ -39,7 +39,6 @@ def bind_listener():
 
 async def keep_alive_heartbeat():
     from bot.clients import worker_clients, record_heartbeat_ping
-    from bot.modules.memory import flush_ram, check_memory_circuit_breaker
 
     await asyncio.sleep(5)
     while True:
@@ -55,8 +54,6 @@ async def keep_alive_heartbeat():
             except Exception as error:
                 logger.warning('Worker heartbeat failed (%s).', type(error).__name__)
         record_heartbeat_ping()
-        check_memory_circuit_breaker()
-        flush_ram()
         await asyncio.sleep(120)
 
 
@@ -67,6 +64,7 @@ async def main():
     from bot.server import server
     from bot.modules.activity_store import activity_store
     from bot.modules.archive_cache import archive_cache
+    from bot.modules.memory import monitor_memory
     from bot.modules.worker_setup import setup
 
     loop = asyncio.get_running_loop()
@@ -103,6 +101,7 @@ async def main():
         if stop.is_set():
             return False
         logger.info('HTTP server ready at %s:%d.', Server.BIND_ADDRESS, Server.PORT)
+        lifecycle.spawn(monitor_memory(stop))
         lifecycle.spawn(keep_alive_heartbeat())
         lifecycle.spawn(clients.notify_restart())
         done, _ = await asyncio.wait((http_task, stop_task), return_when=asyncio.FIRST_COMPLETED)
