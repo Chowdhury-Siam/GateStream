@@ -81,8 +81,7 @@ class ServerTests(unittest.IsolatedAsyncioTestCase):
                 with patch.multiple(main, get_file=AsyncMock(return_value=doc),
                                     get_message=AsyncMock(return_value=message),
                                     get_cached_chunk=AsyncMock(return_value=b'PK1234'),
-                                    is_chunk_cached=lambda *_: True, add_bandwidth_bytes=AsyncMock(),
-                                    flush_ram=lambda: None, check_memory_circuit_breaker=lambda: None):
+                                    is_chunk_cached=lambda *_: True, add_bandwidth_bytes=AsyncMock()):
                     client = instance.test_client()
                     head = await client.head('/dl/file')
                     full = await client.get('/dl/file')
@@ -230,7 +229,7 @@ class ActivityEndpointTests(unittest.IsolatedAsyncioTestCase):
         doc = dict(file_name='file.mp4', file_size=6, mime_type='video/mp4', channel_id=1, message_id=2)
         with patch.object(main, 'activity', activity), patch.object(main, 'get_file', AsyncMock(return_value=doc)):
             with patch.object(main, 'get_cached_chunk', AsyncMock(return_value=b'abcdef')), patch.object(main, 'is_chunk_cached', return_value=True):
-                with patch.object(main, 'add_bandwidth_bytes', AsyncMock()), patch.object(main, 'flush_ram'), patch.object(main, 'check_memory_circuit_breaker'):
+                with patch.object(main, 'add_bandwidth_bytes', AsyncMock()):
                     # Inspect ASGI headers directly: Quart's buffered test response rewrites empty HEAD bodies to length zero.
                     async with instance.test_client().request('/dl/private-code', method='HEAD') as head:
                         await head.send(b'')
@@ -252,8 +251,7 @@ class ActivityEndpointTests(unittest.IsolatedAsyncioTestCase):
         doc = dict(file_name='file.mp4',file_size=6,mime_type='video/mp4',channel_id=1,message_id=2)
         with patch.object(main,'activity',tracker), patch.object(main,'get_file',AsyncMock(return_value=doc)), \
              patch.object(main,'get_cached_chunk',AsyncMock(return_value=b'abcdef')), \
-             patch.object(main,'is_chunk_cached',return_value=True),patch.object(main,'add_bandwidth_bytes',AsyncMock()), \
-             patch.object(main,'flush_ram'),patch.object(main,'check_memory_circuit_breaker'):
+             patch.object(main,'is_chunk_cached',return_value=True),patch.object(main,'add_bandwidth_bytes',AsyncMock()):
             client=instance.test_client()
             await client.head('/dl/file')
             await client.get('/dl/file?stream=1')
