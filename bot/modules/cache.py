@@ -6,7 +6,6 @@ import shutil
 from bot.config import Resources
 from collections import OrderedDict
 from logging import getLogger
-from math import ceil
 
 logger = getLogger('cache')
 
@@ -36,58 +35,39 @@ _IN_FLIGHT_CHUNKS: dict[tuple[str, int], asyncio.Event] = {}
 
 def is_chunk_cached(file_code: str, chunk_idx: int) -> bool:
     """Fast in-memory check whether a chunk is already cached on local SSD."""
-    return (file_code, chunk_idx) in _CACHE_INDEX
+    return MAX_CACHE_BYTES > 0 and (file_code, chunk_idx) in _CACHE_INDEX
 
-async def prefetch_chunk(file_code: str, chunk_idx: int, total_chunks: int, target_msg=None, channel_id: int | str = None, message_id: int = None):
-    """
-    Proactively fetches and caches a critical chunk (Head 0 or Tail EOF) in a detached background task.
-    Uses in-flight locking so concurrent requests can wait for completion instead of duplicate downloading.
-    """
-    if MAX_CACHE_BYTES == 0 or is_chunk_cached(file_code, chunk_idx):
+async def prefetch_tail_chunk(file_code: str, total_chunks: int, channel_id, message_id):
+    """Use at most one speculative Telegram read for playback seeking."""
+    if MAX_CACHE_BYTES == 0 or total_chunks <= 4:
         return
 
+    chunk_idx = total_chunks - 1
     key = (file_code, chunk_idx)
     async with _CACHE_LOCK:
-        if key in _IN_FLIGHT_CHUNKS:
-            return  # Already being fetched by another worker task
-        evt = asyncio.Event()
-        _IN_FLIGHT_CHUNKS[key] = evt
+        if _IN_FLIGHT_CHUNKS or is_chunk_cached(file_code, chunk_idx):
+            return
+        ready = asyncio.Event()
+        _IN_FLIGHT_CHUNKS[key] = ready
 
     try:
         from bot.clients import get_worker_client, TelegramBot
         from bot.modules.telegram import get_message, get_media_chunk
         worker = get_worker_client() or TelegramBot
-        msg = target_msg
-        if channel_id and message_id:
+        msg = await get_message(channel_id, message_id, client=worker, allow_fallback=False)
+        if not msg and worker != TelegramBot:
+            worker = TelegramBot
             msg = await get_message(channel_id, message_id, client=worker, allow_fallback=False)
-            if not msg and worker != TelegramBot:
-                worker = TelegramBot
-                msg = await get_message(channel_id, message_id, client=worker, allow_fallback=False)
-
-        if not msg:
-            return
-
-        chunk = await get_media_chunk(worker, msg, chunk_idx)
-        if chunk:
-            await put_cached_chunk(file_code, chunk_idx, chunk, total_chunks)
-            logger.info("Detached prefetch saved chunk %d for %s (size %d bytes).", chunk_idx, file_code, len(chunk))
-    except Exception as e:
-        logger.debug("Prefetch background task exception for chunk %d: %s", chunk_idx, e)
+        if msg:
+            chunk = await get_media_chunk(worker, msg, chunk_idx)
+            if chunk:
+                await put_cached_chunk(file_code, chunk_idx, chunk, total_chunks)
+    except Exception as error:
+        logger.debug('Playback tail prefetch ended (%s).', type(error).__name__)
     finally:
-        async with _CACHE_LOCK:
-            evt.set()
-            _IN_FLIGHT_CHUNKS.pop(key, None)
+        _IN_FLIGHT_CHUNKS.pop(key, None)
+        ready.set()
 
-async def prefetch_head_chunk(file_code: str, total_chunks: int, target_msg=None, channel_id: int | str = None, message_id: int = None):
-    """Detached un-cancellable prefetcher for chunk 0."""
-    await prefetch_chunk(file_code, 0, total_chunks, target_msg, channel_id, message_id)
-
-async def prefetch_tail_chunk(file_code: str, total_chunks: int, target_msg=None, channel_id: int | str = None, message_id: int = None):
-    """Detached un-cancellable prefetcher for EOF tail chunk (Matroska Cues)."""
-    if total_chunks <= 4:
-        return
-    tail_idx = total_chunks - 1
-    await prefetch_chunk(file_code, tail_idx, total_chunks, target_msg, channel_id, message_id)
 
 def init_cache():
     """Initializes the local SSD chunk cache directory and scans existing chunks into LRU index."""
