@@ -25,8 +25,7 @@ export default {
     }
     const incoming = new URL(request.url);
     const formPost = request.method === 'POST' && (
-      ['/index/sign-in', '/index/sign-out', '/index/worker-setup'].includes(incoming.pathname) ||
-      /^\/index\/(?:share\/[A-Za-z0-9_-]{43}|folder\/[A-Za-z0-9_-]{43}\/rename)$/.test(incoming.pathname)
+      ['/index/sign-in', '/index/sign-out', '/index/worker-setup'].includes(incoming.pathname)
     );
     if (!['GET', 'HEAD'].includes(request.method) && !formPost) {
       return new Response('Method not allowed', {
@@ -45,7 +44,7 @@ export default {
     // value and preserve visitor grouping across changing proxy connections.
     headers.delete('X-GateStream-Client');
     const visitor = request.headers.get('CF-Connecting-IPv6') || request.headers.get('CF-Connecting-IP');
-    if (visitor && (incoming.pathname.startsWith('/dl/') || incoming.pathname.startsWith('/index/archive/'))) {
+    if (visitor && incoming.pathname.startsWith('/dl/')) {
       const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(
         `${visitor}|${request.headers.get('User-Agent') || ''}`));
       headers.set('X-GateStream-Client', Array.from(new Uint8Array(digest),
