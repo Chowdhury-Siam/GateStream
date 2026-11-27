@@ -22,7 +22,7 @@ with patch.dict(os.environ, {
     from bot.modules import access, bot_menu
     from bot.modules.forum_updates import install_forum_parser
     with patch.object(TelegramBot, 'add_handler'):
-        from bot.plugins import access as commands, callback, files, personal_index
+        from bot.plugins import access as commands, callback, files
 
 
 OWNER = 12345
@@ -91,7 +91,7 @@ class AccessTests(unittest.IsolatedAsyncioTestCase):
         await commands.file_to_link_command(None, message)
         await bot_menu.send_menu(message, OWNER)
         buttons = message.reply.await_args.kwargs['reply_markup'].inline_keyboard
-        self.assertIn('Index', [button.text for row in buttons for button in row])
+        self.assertNotIn('Index', [button.text for row in buttons for button in row])
         self.assertEqual(self.topic['topic_id'], TOPIC)
 
         with patch.object(access.db.db['bot_settings'], 'find_one', AsyncMock(side_effect=RuntimeError)):
@@ -129,10 +129,9 @@ class AccessTests(unittest.IsolatedAsyncioTestCase):
         await commands.access_command(None, owner)
         self.assertFalse(await access.has_access(USER, GROUP))
 
-    async def test_group_files_link_automatically_and_index_only_in_the_bound_topic(self):
+    async def test_group_files_link_automatically_only_in_the_bound_topic(self):
         self.grants.update({GROUP, GROUP - 1})
         self.topic = {'_id': 'file_to_link', 'chat_id': GROUP, 'topic_id': TOPIC}
-        draft = None
         saved = {}
         audio = SimpleNamespace(file_name='Courtesy Call.flac', file_size=30300000,
                                 mime_type='audio/flac', duration=236)
@@ -141,19 +140,6 @@ class AccessTests(unittest.IsolatedAsyncioTestCase):
         def in_topic(command=None, **fields):
             return update(USER, command, chat=ChatType.SUPERGROUP, chat_id=GROUP,
                           message_thread_id=TOPIC, **fields)
-
-        async def active_folder(user_id, chat_id, *, topic_id=None):
-            self.assertEqual((user_id, chat_id, topic_id), (USER, GROUP, TOPIC))
-            return draft
-
-        async def create_folder(user_id, name, chat_id, *, topic_id=None):
-            nonlocal draft
-            self.assertEqual((user_id, chat_id, topic_id), (USER, GROUP, TOPIC))
-            draft = {'_id': 'topic-draft', 'name': name}
-
-        async def folder_count(user_id, folder_id):
-            return sum(doc['personal_index_id'] == folder_id and doc['user_id'] == user_id
-                       for doc in saved.values())
 
         async def save_file(**fields):
             doc = {**fields, 'code': 'song'}
@@ -165,23 +151,18 @@ class AccessTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(await files.UPLOAD_MEDIA(client, Message(id=43, chat=media.chat, audio=audio)))
         status = SimpleNamespace(edit_text=AsyncMock())
         media.reply.return_value = status
-        index = in_topic(['index'], text='/index')
         link = in_topic(['link'], text='/link')
         link.reply_to_message = media
 
         with patch.object(access.Telegram, 'CHANNEL_ID', -1005678), \
-             patch.multiple(files.library, active_folder=active_folder, create_folder=create_folder,
-                            folder_count=folder_count, finish_folder=AsyncMock()), \
-             patch.object(personal_index, 'reply_zip', AsyncMock()) as reply_zip, \
              patch.object(files, 'get_group_upload', AsyncMock(side_effect=lambda *key: saved.get(key))), \
              patch.object(files, 'save_file', AsyncMock(side_effect=save_file)) as save:
-            for item in (media, index, link):
+            for item in (media, link):
                 item.message_thread_id = TOPIC + 1
             await files.handle_user_file(client, media)
-            await personal_index.index_command(client, index)
             await files.group_link_command(client, link)
             media.copy.assert_not_awaited()
-            for item in (media, index, link):
+            for item in (media, link):
                 item.reply.assert_not_awaited()
                 item.message_thread_id = TOPIC
 
@@ -191,7 +172,7 @@ class AccessTests(unittest.IsolatedAsyncioTestCase):
             media.chat.id = GROUP
 
             await files.handle_user_file(client, media)
-            self.assertIsNone(save.call_args.kwargs['personal_index_id'])
+            self.assertNotIn('personal_index_id', save.call_args.kwargs)
             self.assertEqual(save.call_args.kwargs['user_id'], USER)
             self.assertEqual(save.call_args.kwargs['mime_type'], audio.mime_type)
             self.assertIn('/dl/song', status.edit_text.call_args.kwargs['text'])
@@ -204,27 +185,10 @@ class AccessTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn('one of your files in this topic', link.reply.call_args.args[0])
             media.message_thread_id = TOPIC
 
-            await personal_index.index_command(client, index)
-            self.assertIn('Post your files in this topic', index.reply.call_args.args[0])
-            media.id = 44
-            media.reply.reset_mock()
-            await files.handle_user_file(client, media)
-            self.assertEqual(save.call_args.kwargs['personal_index_id'], 'topic-draft')
-            self.assertEqual(save.call_args.kwargs['file_name'], audio.file_name)
-            media.reply.assert_not_awaited()
-
-            index.text = '/index Songs'
-            index.message_thread_id = TOPIC + 1
-            await personal_index.index_command(client, index)
-            reply_zip.assert_not_awaited()
-            index.message_thread_id = TOPIC
-            await personal_index.index_command(client, index)
-            reply_zip.assert_awaited_once_with(index, {'_id': 'topic-draft', 'name': 'Songs'})
-
             self.grants.clear()
             media.id = 45
             await files.handle_user_file(client, media)
-            self.assertEqual(media.copy.await_count, 2)
+            media.copy.assert_awaited_once()
 
     async def test_forwarded_forum_file_and_link_reply_parse_without_topic_details(self):
         def decode(obj):
@@ -277,7 +241,6 @@ class AccessTests(unittest.IsolatedAsyncioTestCase):
         saved = dict(code='episode', file_name='Episode.mkv', file_size=4, mime_type='application/octet-stream')
         with patch.object(access.Telegram, 'CHANNEL_ID', -1009999), \
              patch.object(files, 'get_group_upload', AsyncMock(side_effect=[None, saved])), \
-             patch.object(files.library, 'active_folder', AsyncMock(return_value=None)), \
              patch.object(files, 'save_file', AsyncMock(return_value=saved)) as save:
             await files.handle_user_file(client, parsed)
             self.assertIn('/dl/episode', status.edit_text.await_args.kwargs['text'])
@@ -307,30 +270,34 @@ class AccessTests(unittest.IsolatedAsyncioTestCase):
         message = update(OWNER, chat=ChatType.SUPERGROUP, chat_id=GROUP, message_thread_id=TOPIC + 1)
         query = SimpleNamespace(from_user=SimpleNamespace(id=USER), data='menu:index',
                                 message=message, answer=AsyncMock())
-        with patch.object(personal_index, 'personal_index', AsyncMock()) as index:
-            await callback.manage_callback(None, query)
-            index.assert_not_awaited()
-            self.assertIn('File To Link', query.answer.call_args.args[0])
-            await bot_menu.send_menu(message, OWNER)
-            buttons = message.reply.call_args.kwargs['reply_markup'].inline_keyboard
-            self.assertNotIn('Index', [button.text for row in buttons for button in row])
-            message.message_thread_id = TOPIC
-            await callback.manage_callback(None, query)
-            index.assert_awaited_once_with(message, user_id=USER)
-            query.data = 'menu:access'
-            await callback.manage_callback(None, query)
-            self.assertTrue(query.answer.call_args.kwargs['show_alert'])
-            self.assertIn('unavailable', query.answer.call_args.args[0])
-            query.data = 'menu:index'
-            message.chat.type, message.chat.id = ChatType.PRIVATE, USER
-            await callback.manage_callback(None, query)
-            index.assert_awaited_once()
-            self.assertIn('has not granted', query.answer.call_args.args[0])
+        await callback.manage_callback(None, query)
+        self.assertIn('unavailable', query.answer.await_args.args[0])
+        message.message_thread_id = TOPIC
+        query.data = 'menu:access'
+        await callback.manage_callback(None, query)
+        self.assertTrue(query.answer.await_args.kwargs['show_alert'])
+        self.assertIn('unavailable', query.answer.await_args.args[0])
+        query.data = 'menu:library'
+        message.chat.type, message.chat.id = ChatType.PRIVATE, USER
+        await callback.manage_callback(None, query)
+        self.assertIn('has not granted', query.answer.await_args.args[0])
 
         await bot_menu.send_menu(message, OWNER)
         buttons = message.reply.call_args.kwargs['reply_markup'].inline_keyboard
         self.assertEqual([button.text for row in buttons for button in row],
-                         ['Index', 'Library', 'My ID', 'Manage access', 'Set up worker repair'])
+                         ['Library', 'My ID', 'Manage access', 'Set up worker repair'])
+
+    async def test_telegram_command_menus_keep_catalog_without_index(self):
+        client = SimpleNamespace(set_bot_commands=AsyncMock())
+        await bot_menu.register_commands(client)
+        menus = [
+            {entry.command for entry in call.args[0]}
+            for call in client.set_bot_commands.await_args_list
+        ]
+        self.assertEqual(len(menus), 3)
+        self.assertTrue(all('index' not in menu for menu in menus))
+        self.assertIn('catalog', menus[1])
+        self.assertIn('catalog', menus[2])
 
     async def test_access_fails_closed_when_mongo_is_unavailable(self):
         with patch.object(access.db, 'db', None):
