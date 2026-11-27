@@ -17,7 +17,7 @@ import (
 	"sync"
 )
 
-const version = "3.0.0"
+const version = "3.0.1"
 
 type Config struct {
 	GoProcs                                            int
