@@ -45,20 +45,14 @@ def get_current_ram_mb():
         return 0.0
 
 
-def check_memory_circuit_breaker(clean_threshold_mb=None, restart_threshold_mb=None, threshold_mb=None):
+def check_memory_circuit_breaker(clean_threshold_mb=None, restart_threshold_mb=None):
     clean = Resources.MEMORY_CLEAN_MB if clean_threshold_mb is None else clean_threshold_mb
     restart = Resources.MEMORY_RESTART_MB if restart_threshold_mb is None else restart_threshold_mb
-    if threshold_mb is not None:
-        clean = threshold_mb
     rss = get_current_ram_mb()
     if rss <= 0 or rss < clean:
         return False
-    try:
-        from bot.modules.telegram import _MESSAGE_CACHE
-        while len(_MESSAGE_CACHE) > 20:
-            _MESSAGE_CACHE.popitem(last=False)
-    except (ImportError, AttributeError):
-        pass
+    from bot.modules.telegram import clear_message_caches
+    clear_message_caches()
     flush_ram()
     current = get_current_ram_mb()
     logger.warning('Memory cleanup: %.1f MiB -> %.1f MiB.', rss, current)
