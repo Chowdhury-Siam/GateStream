@@ -66,11 +66,10 @@ test('preserves origin errors and redirects; reports network failures as 502', a
   assert.equal((await worker.fetch(new Request('https://proxy.example/health'), env)).status, 502);
 });
 
-test('forwards personal library POST forms, cookies and body without buffering ZIP responses', async (t) => {
+test('forwards library and setup POST forms and rejects retired archive actions', async (t) => {
   const folder = 'a'.repeat(43);
-  for (const path of ['/index/sign-in', '/index/sign-in?setup=workers', '/index/sign-out', '/index/worker-setup',
-                      '/index/share/' + folder, '/index/folder/' + folder + '/rename']) {
-    const upstream = new Response('zip-or-login', { headers: { 'Set-Cookie': 'gatestream_index=session; HttpOnly', 'Cache-Control': 'private, no-store' } });
+  for (const path of ['/index/sign-in', '/index/sign-in?setup=workers', '/index/sign-out', '/index/worker-setup']) {
+    const upstream = new Response('sign-in', { headers: { 'Set-Cookie': 'gatestream_index=session; HttpOnly', 'Cache-Control': 'private, no-store' } });
     t.mock.method(globalThis, 'fetch', async (url, options) => {
       assert.equal(url, 'https://origin.example' + path);
       assert.equal(options.method, 'POST');
@@ -88,7 +87,7 @@ test('forwards personal library POST forms, cookies and body without buffering Z
   }
   assert.equal((await worker.fetch(new Request('https://proxy.example/dl/code', { method: 'POST' }), env)).status, 405);
   assert.equal((await worker.fetch(new Request('https://proxy.example/index/share/invalid', { method: 'POST' }), env)).status, 405);
-  for (const path of ['/index/login', '/index/logout', '/index/download']) {
+  for (const path of ['/index/login', '/index/logout', '/index/download', '/index/share/' + folder, '/index/folder/' + folder + '/rename']) {
     assert.equal((await worker.fetch(new Request('https://proxy.example' + path, { method: 'POST' }), env)).status, 405);
   }
 });
