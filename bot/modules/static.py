@@ -19,17 +19,6 @@ def format_duration(seconds: int | None) -> str:
         return f"{h}:{m:02d}:{s:02d}"
     return f"{m:02d}:{s:02d}"
 
-FileLinksText = """
-✦ **GateStream · File ready**
-📂 **File:** `%(file_name)s`
-📦 **Size:** `%(file_size)s`
-⏱️ **Duration:** `%(duration)s`
-🏷️ **Category:** `%(category)s`
-
-📥 **Download Link:**
-`%(dl_link)s`
-"""
-
 MediaLinksText = """
 ✦ **GateStream · Media indexed**
 ━━━━━━━━━━━━━━━━━━━━━━━
@@ -44,8 +33,4 @@ MediaLinksText = """
 `%(dl_link)s`
 """
 
-InvalidQueryText = "Query data mismatched."
-MessageNotExist = "File does not exist or has been revoked."
-LinkRevokedText = "The link has been revoked successfully from the database."
-InvalidPayloadText = "Invalid payload."
 InvalidLinkText = "❌ Invalid Telegram message link provided.\n\n**Usage:**\n`/link https://t.me/c/1234567890/42` or `/link https://t.me/channel_name/42`"
