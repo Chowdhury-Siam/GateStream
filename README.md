@@ -2,7 +2,7 @@
   <img src="bot/server/templates/brand.svg" width="88" alt="GateStream gateway logo">
   <h1>GateStream</h1>
   <p><strong>Gateway to your media.</strong></p>
-  <p>Index your Telegram library. Open a gate. Press play.</p>
+  <p>Play and download your Telegram files.</p>
 </div>
 
 GateStream turns media in your Telegram channels into browser playback,
@@ -10,7 +10,7 @@ direct downloads, and API links. The bot manages your catalog in MongoDB;
 the server retrieves media from Telegram as it streams. A dark interface,
 warm gold accents, and a gateway mark carry the identity from bot to browser.
 
-## GateStream v2.0.34 — GitHub package
+## GateStream v2.0.36 — GitHub package
 
 This complete GitHub package includes the updated Python origin, Telegram bot,
 web interface, Cloudflare Worker, GitHub Actions deployment workflow, Dockerfile,
@@ -26,7 +26,7 @@ Install the updated `requirements.txt` before restarting.
 | Package | Purpose |
 | --- | --- |
 | `GateStream-GitHub.zip` | Full source, Cloudflare Worker, GitHub Actions deployment, and tests |
-| `GateStream-HuggingFace.zip` | Docker Space hosting files, bot, player, and Python tests |
+| `GateStream-Lite.zip` | Python bot and origin, without the Cloudflare Worker or GitHub workflow |
 
 Extract the ZIP and upload the **contents** of its project folder, so `README.md`,
 `Dockerfile`, and `bot/` sit at the repository root.
@@ -37,8 +37,8 @@ Extract the ZIP and upload the **contents** of its project folder, so `README.md
 
 ## What you can do
 
-- **Save Telegram files.** Upload a file directly or collect multiple files into a ZIP. The owner can also link a channel post with `/link`.
-- **Browse your uploads.** Sign in through Telegram at `/index` to see your ZIP folders and single files.
+- **Save Telegram files.** Upload a file directly to get its own link. The owner can also link a channel post with `/link`.
+- **Browse your uploads.** Sign in with `/catalog` to view and download your uploads.
 - **Follow transfers live.** The home page shows active links, HTTP connections, byte counts, progress, speed, elapsed time and ETA.
 - **Watch your way.** Play in the browser, resume playback, or open VLC or MX Player.
 - **Share a link.** Create stream, download, and API URLs; revoke access by removing a link.
@@ -135,8 +135,6 @@ The bot starts with access for `OWNER_ID` only. The owner manages access with
 | Revoke a grant | Use `/unauth` with the same ID, reply, or group |
 | Open the bot menu | `/start` or `/help` |
 | Open your personal library | `/catalog` in a private chat |
-| Start or finish a ZIP | `/index` or the **Index** button |
-| Finish a ZIP with a custom name | `/index My folder` |
 | Link a channel file | `/link [category] MESSAGE_LINK` (owner only) |
 
 Use a positive Telegram ID for a user and a negative ID for a group.
@@ -152,15 +150,11 @@ Use a positive Telegram ID for a user and a negative ID for a group.
 3. Give the bot access to ordinary messages in the group. A bot that is a
    group admin receives them. If you disable group privacy in BotFather,
    re-add the bot to the group for the change to take effect.
-4. Post a file in the topic to receive its link automatically. Open `/index`
-   first to collect your uploads into a ZIP, then send `/index My folder`
-   in that topic. To request an individual link again, reply to one of your
-   own topic files with `/link`.
+4. Post a file in the topic to receive its link automatically. To request
+   a link again, reply to one of your own topic files with `/link`.
 
-The group file handler, `/index`, and `/link` are scoped to that one topic.
-Start a new group index after upgrading from a version that tracked drafts
-only by group. Private uploads and private `/index` are available with a
-direct user grant. The owner's private `/link` still links channel posts.
+Group uploads and group `/link` are scoped to that topic. Private uploads
+require a direct user grant. The owner's private `/link` still links channel posts.
 
 Owner tools include `/stats`, `/workers`, `/workersetup`, `/workerrepair`, `/log`, `/sync_duration`,
 `/set_title`, `/revoke`, `/clean`, `/backup`, `/restore`, `/purge`,
@@ -200,16 +194,15 @@ The log check also requires permission to post in its destination.
 | --- | --- |
 | `/` | GateStream landing page |
 | `/api/activity` | Live aggregate transfer counters and anonymous progress rows |
-| `/index/archive/<token>/status` | ZIP preparation progress for its temporary link |
 | `/health`, `/ping` | `OK` when the web server is responding; `X-GateStream-Version` identifies the deployed release |
 | `/stream/<code>` | Browser player |
 | `/dl/<code>` | Download; add `?stream=1` for inline media |
 | `/api/file/<code>` | File details and links |
 | `/api/batch/<code>` | Batch details and episode links |
-| `/index` | Personal upload library, with Index folders and Single files |
+| `/index` | Signed-in library of individual uploads |
 
 Anyone holding a valid media URL can access it. Telegram user restrictions
-apply to bot commands, not HTTP playback. Index and share media you have
+apply to bot commands. Share media you have
 permission to distribute.
 
 ## Docker
@@ -219,26 +212,14 @@ docker build -t gatestream .
 docker run -d --name gatestream -p 8080:7860 --env-file .env -e PORT=7860 --restart unless-stopped gatestream
 ```
 
-Set `BASE_URL` for the public address mapped to this container. For Spaces, use `GateStream-HuggingFace.zip`; its README includes the Docker
-SDK metadata and port `7860` configuration.
+Set `BASE_URL` for the public address mapped to this container.
 
-## Personal library and ZIP downloads
+## Personal library
 
-Sign in at `/index` with a one-time link from the bot's `/catalog` command.
-Uploads outside an index session appear under **Single files**. Start and finish
-a folder with `/index`. The final command shows the ZIP name, file count,
-copyable URL, and a **Download** button.
-Open the folder in the library to rename it or download the ZIP from the web.
-
-GateStream starts building a cached ZIP in the background when it creates
-the link. If both builders are busy, the ZIP queues and starts as soon as a
-slot opens. You can use the link while the ZIP builds, with HTTP range,
-resume, and multiple-connection support. If the archive cannot fit
-in the available cache, GateStream streams it directly in one connection.
-Direct streams restart from the beginning on retry. ZIP links expire after
-24 hours. Anyone with the share link can download the folder.
-
-Existing channel download and stream links work by file code.
+Send `/catalog` in the bot's private chat to get a one-time browser sign-in link.
+The library lists each upload individually, including files saved in old index
+folders. Individual links support playback, HTTP byte ranges and resume.
+Old batch ZIP and folder links return 404 after the upgrade.
 
 ## Automatic media categories
 
@@ -249,15 +230,11 @@ results remain Direct files.
 
 ## Live activity dashboard
 
-The compact home page shows separate **Single files downloaded** and **ZIPs
-downloaded** totals, with live bandwidth cards in an expandable panel.
-New totals begin with this update: previous aggregate HTTP request counters
-cannot reconstruct how many entire files were downloaded. Completion means
-all resource bytes were handed to completed response streams. It is not proof
-that the client saved the file to disk. HEAD, inline playback, ZIP building and
-range probes do not increment these new totals; overlapping HTTP ranges for
-the same anonymous client/resource are combined. A ZIP counts once, not once
-per selected file or range connection. 
+The home page shows the total number of individual files downloaded, with
+live bandwidth cards in an expandable panel. A completion means GateStream
+handed all file bytes to response streams. Overlapping ranges for the same
+anonymous client and file are combined. HEAD and inline playback do not
+increment download totals.
 
 In-flight range coverage is kept in memory for up to 24 hours and 1024 anonymous
 client/resource pairs (at most 256 disjoint ranges each). It resets on restart,
@@ -308,18 +285,14 @@ values are not erased and are not shown as active features on the home page.
 ## Upgrading an existing deployment
 
 1. Back up the database with `/backup` and retain your current hosting settings.
-2. Use a clean source directory from the appropriate ZIP. When upgrading an
-   existing checkout, remove retired files `bot/plugins/drive.py`,
-   `bot/modules/drive.py`, `tests/test_drive.py`, and `GOOGLE_DRIVE.md`. If v2.0.8
-   was deployed, also remove `bot/plugins/settings.py`,
-   `bot/modules/runtime_settings.py`, `tests/test_bot_settings.py`, and
-   `BOT_SETTINGS.md`. Do not remove your database, Telegram session files or
-   cached archives that are still needed for resume.
+2. Use a clean source directory from the appropriate ZIP. Copy over your
+   existing configuration and Telegram session files. Keep the media cache if
+   you want to reuse it. Batch ZIP caches from older releases are retired.
 3. Keep the current database names, bot tokens, and Worker name, then restart the host.
 4. Test `/health`, generate a file link, and check playback and seeking.
 
-This release changes the identity and presentation. It retains MongoDB defaults
-`OmniArchiver` and `OmniArchiverDB`, `OMNI_MONGO_URI`, file codes, HTTP routes,
+This release retains MongoDB defaults
+`OmniArchiver` and `OmniArchiverDB`, `OMNI_MONGO_URI`, single-file codes and routes,
 Telegram session names, and the browser's existing resume keys. No database
 migration is needed. Renaming storage merely for branding could hide existing
 records, so these compatibility identifiers remain intentionally.
@@ -344,194 +317,6 @@ and do not need live Telegram or MongoDB connections.
 
 ## Project history
 
-GateStream is Siam's rebrand of the supplied OmniArchiver-F2L project.
-Original upstream attribution is preserved in [ACKNOWLEDGEMENTS.md](ACKNOWLEDGEMENTS.md).
-
-## v2.0.9 — v2.0.7 base with Drive integration removed
-
-This release starts from the v2.0.7 source ZIPs. It removes every Google Drive
-transfer command (`/drive`, `/gdrive`, `/mirror`, `/clone`, `/drivestatus`,
-`/canceldrive`), credential loader, Drive configuration variable, Google API
-dependency and Bhadoo index button. The v2.0.8 owner settings module is not part
-of this v2.0.7-based package. The bot imports an explicit list of active plugins,
-so retired plugins left by an overlay upload cannot register old commands.
-
-Custom ZIP names, compact Library/Private links pages, separate persistent
-single-file/ZIP delivery totals, resumable and parallel ZIP sources, indexing,
-classification and existing database settings are retained. The home dashboard
-now shows file-download activity only. Existing credentials or historical data
-in external secrets/database storage are not deleted or used by this release;
-remove unused host credential secrets separately if desired.
-
-Removing these features does not establish why an account was locked and does
-not guarantee hosting approval or account reinstatement. Telegram streaming
-and public downloads still require a host that permits the workload.
-
-
-## v2.0.10 — New-user channel notices
-
-Set the existing `TELEGRAM_CHANNEL_ID` to the destination channel and give the
-bot permission to post there. An allowed user's first private `/start` sends
-their Telegram-provided first/last name, user ID, username/profile link, language,
-Premium/verified/bot/restricted/scam/fake/deleted flags, available DC ID and
-first-start time (UTC). The bot
-does not request or collect phone numbers, IP addresses, locations or contacts.
-Use a private channel if these notices should only be visible to administrators.
-
-The existing MongoDB database gains a `bot_users` collection containing only the
-user ID, first-start time and notice delivery state. Repeated `/start`, `/help`
-and normal restarts do not resend a successfully recorded notice. Existing users
-are considered new on their first `/start` after this upgrade because older
-versions did not record starts. No notice is sent when the channel is unset.
-
-Channel or database errors do not block the welcome; failed notices retry on
-the user's next `/start`. A two-minute claim prevents concurrent duplicate
-notices and expires after a crash. A crash/timeout between Telegram accepting
-a notice and MongoDB recording success can still cause a repeat on retry.
-The bot must have posting permission; delivery has been tested with mocks,
-not a live channel. All Drive functionality remains removed. Existing database
-names, hosting settings and resumable streaming behavior are unchanged.
-
-
-## v2.0.11 — Visible ZIP preparation progress
-
-ZIP creation now has separate checking/queued/preparing/ready states. While the
-server creates a link, an indeterminate bar shows that no byte progress has
-arrived yet. Once preparation starts, the page displays a progress bar, percent,
-prepared bytes / total ZIP size, and source preparation speed when available.
-Progress refreshes every two seconds in Prepare first mode. Start immediately
-shows the same byte progress alongside its existing buffer status. Preparation
-progress measures the ZIP being built on the server, not bytes downloaded by
-the browser. A source stall can leave the percentage unchanged.
-
-Selection queries filter matching documents before expanding batch episodes
-and no longer sort the whole catalog; section access checks remain in place.
-Network status timeouts retry, and failed link creation shows a clear error.
-The short link-creation request has a 25-second server deadline so a stalled
-request cannot silently wait for several minutes behind the Worker. ZIP building
-continues separately and is not limited to 25 seconds.
-The no-JavaScript preparation page also displays prepared/total sizes.
-
-Checks for this release also included
-the existing Python suite and the GitHub package's Worker tests. Live host
-performance has not been measured. User notices and the complete Drive removal
-remain intact; database settings and Hugging Face README metadata are unchanged.
-
-
-## v2.0.12 — Count downloads closed at Content-Length
-
-The single-file and ZIP totals now record actual byte coverage as chunks are
-handed to HTTP responses, including partial open-ended range connections closed
-by download managers after their assigned segment. Previously a complete file
-could remain uncounted when a connection closed at Content-Length before the
-source iterator reached EOF/cleanup. Receiving the entire advertised response
-payload now counts as a completed request even if that connection closes then.
-Only full resource byte coverage increments the file/ZIP total; overlapping
-retries do not multiply totals, gaps stay incomplete, and playback/HEAD/internal
-ZIP preparation remain excluded.
-
-Deploy both the origin and the updated Cloudflare Worker. The Worker overwrites
-an anonymous visitor/agent hash header to keep all range connections grouped
-when origin-side proxy addresses vary. Older Workers can fall back to forwarded
-Cloudflare visitor headers; direct hosting falls back to the remote address.
-These headers affect analytics only and never authorize access. Raw visitor
-addresses and user agents are not stored by this counter or exposed by its API.
-
-Successful download totals still persist in the existing MongoDB analytics
-checkpoint. In-progress range coverage is memory-only, bounded to 1024 pairs
-and 24 hours, and resets on restart. Changing visitor address or User-Agent
-during a download can split its coverage. The totals describe bytes handed
-out by the server, not proof of a saved client file. Past completed downloads
-missed by the old counter cannot be reconstructed accurately and are not added
-retroactively. Existing totals, database names/settings and HF metadata remain
-unchanged. Drive is still completely removed.
-
-
-## v2.0.13 — Refresh expired Telegram media references
-
-Media streams now handle both raised file-reference errors and Hydrogram's
-logged-error/early-EOF behavior. A short read refreshes its channel message
-through the same downloading bot once, then resumes at the next unread chunk.
-Single-chunk video/prefetch reads use the same recovery. Refresh attempts are
-bounded; stalls and persistent failures still fall back to the existing worker
-rotation logic and retry limits. Continuous-download outer retries also request
-a fresh message rather than reusing an expired one-hour cached reference.
-
-Worker media lookups do not silently borrow the primary bot's file reference.
-If fallback is needed, the download switches to the primary bot explicitly.
-Refreshing one worker's message does not clear other workers' valid cached
-references. Indexing and ordinary message lookups retain their existing primary
-bot fallback. Cooldown logs no longer describe every media-read failure as
-Telegram rate limiting. The upstream SDK may still log the first expired
-reference before recovery; persistent errors can indicate lost channel access
-or a changed/deleted source message.
-
-Deploy the updated origin; the Worker has no changes in this release. Existing
-ZIP preparation, completion counters, user notices and complete Drive removal
-remain intact. Database names/settings and HF metadata are preserved. Tests
-simulate expired references and interrupted streams; live Telegram recovery
-still needs verification on the deployment.
-
-## v2.0.14 — Preserve APK downloads
-
-APK links serve the Android package media type and keep their `.apk` filename.
-The download route uses the filename to resolve generic media types, and new
-APK uploads retain their Telegram filename even when the message has a caption.
-Deploy the updated Python origin to apply the fix to existing APK links.
-
-## v2.0.15 — Personal upload library
-
-1. Send `/index` in a private chat with the bot to start a folder.
-2. Send up to 500 files, then send `/index My folder name`. The bot replies
-   with a shareable ZIP link. A second `/index` without a name uses the name
-   set at the start or the default name.
-3. Send `/catalog` for a one-time browser sign-in link. The **Index** tab
-   shows your finished folders. Open a folder to download individual files,
-   rename the folder and its ZIP, or use the ZIP link.
-4. Upload outside an index session to find the file under **Single files**.
-
-Personal uploads use the configured `TELEGRAM_CHANNEL_ID` storage channel.
-Earlier direct uploads with a recorded owner in that channel appear under
-**Single files**. Anyone with a direct download link or a shared folder ZIP
-link can use it. The library listing and folder renaming require sign-in.
-
-ZIP downloads retain preparation progress and HTTP range support. Large
-folders need enough disk space and may require a larger `ZIP_CACHE_MAX_MB`.
-Deploy the updated Python origin and the updated Cloudflare Worker if you
-access GateStream through its Worker.
-
-## v2.0.16 — Personal library only
-
-The web channel catalog, its shared password commands, and its bulk movie
-listing API have been retired. Old catalog ZIP tickets expire on upgrade.
-The personal library, its folder ZIPs, Telegram channel scanning and search,
-and existing individual file links continue to work. Deploy the updated
-origin and Worker together. No database migration is needed.
-
-## v2.0.17 — Choose the ZIP mode in Telegram
-
-After the final `/index`, choose **Prepare first** to see animated progress
-in Telegram and receive the link when the ZIP is complete. Choose
-**Start immediately** to get a direct download link while the ZIP builds.
-The Python origin runs both modes through the same resumable archive cache
-as the web library.
-
-## v2.0.18 — Start ZIP downloads immediately
-
-After the final `/index`, tap **Start immediately** for a direct ZIP link.
-The web library's **Download ZIP** button starts the same resumable download.
-Previously issued links can still resume while their archive remains cached.
-
-## v2.0.19 — Copyable ZIP links and large folders
-
-The final `/index` replies with the ZIP URL in a copyable code line. If the
-cache cannot reserve enough space, the link streams the ZIP when opened.
-Cached ZIPs retain resume and multiple connections.
-
-## v2.0.20 — Owner-managed access and bot menu
-
-Existing deployments start with owner-only Telegram access. The previous
-environment-based user lists no longer grant access. Use `/auth` in Telegram
-to grant access to each user or group. Existing file links and stored data
-remain usable. The bot now shows an Index, Library, and My ID menu, with
-an access-management button for the owner.
+GateStream is Siam's rebrand of OmniArchiver-F2L. See
+[ACKNOWLEDGEMENTS.md](ACKNOWLEDGEMENTS.md) for upstream attribution and
+[CHANGELOG.md](CHANGELOG.md) for recent changes.
