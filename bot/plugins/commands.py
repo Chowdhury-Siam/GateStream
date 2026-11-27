@@ -2,10 +2,9 @@ from hydrogram import Client
 import asyncio
 import time
 import shutil
-import psutil
 from hydrogram import enums, filters
 from hydrogram.types import Message
-from bot.clients import TelegramBot, worker_clients, get_heartbeat_status
+from bot.clients import worker_clients, get_heartbeat_status
 from bot.config import Telegram
 from bot.database import db
 from bot.modules.static import get_human_size
@@ -63,11 +62,12 @@ async def stats_command(_, msg: Message):
             if db.db is None:
                 raise RuntimeError
             uploads = await db.db['direct_files'].count_documents({})
-            folders = await db.db['library_folders'].count_documents({'state': 'ready'})
-            library = f'Uploads {uploads:,} · ZIP folders {folders:,}'
+            library = f'Uploads {uploads:,}'
     except Exception:
         library = 'MongoDB library counts unavailable.'
     try:
+        import psutil
+
         rss = get_human_size(psutil.Process().memory_info().rss)
         disk = get_human_size(shutil.disk_usage('.').free)
         cpu = await asyncio.to_thread(psutil.cpu_percent, 0.1)
@@ -80,7 +80,7 @@ async def stats_command(_, msg: Message):
         f'Heartbeat {heartbeat}\n{host}\n\n'
         f'Library · MongoDB\n{library}\n\n'
         f"Transfers\nActive links {snapshot['active_media_links']} · Connections {media['active']} · {get_human_size(int(media['speed_bps']))}/s\n"
-        f"Sent {get_human_size(media['bytes'])} · Files completed {media['single_downloads']:,} · ZIPs completed {media['zip_downloads']:,}\n"
+        f"Sent {get_human_size(media['bytes'])} · Files completed {media['single_downloads']:,}\n"
         f"Totals storage: {snapshot['persistence']['state']}\n\n"
         '/workers to test log posting · /workersetup to connect the repair account · /workerrepair to add missing workers'
     )
