@@ -17,7 +17,7 @@ class TransferActivity:
         self.totals = {kind: dict(bytes=0, completed=0, failed=0, incomplete=0)
                        for kind in ('media', 'download', 'upload')}
         self.traffic = {kind: deque() for kind in self.totals}
-        self.totals['media'].update(single_downloads=0, zip_downloads=0)
+        self.totals['media']['single_downloads'] = 0
         self.download_ranges = OrderedDict()
         self.restored = False
         self.persistence = dict(state='pending', last_saved_at=None)
@@ -41,6 +41,7 @@ class TransferActivity:
 
     def checkpoint(self):
         with self.lock:
+            self._expire_ranges(self.clock())
             return {kind: {**totals, 'active': sum(job['kind'] == kind for job in self.jobs.values())}
                     for kind, totals in self.totals.items()}
 
@@ -97,7 +98,11 @@ class TransferActivity:
         finally:
             self.finish(ident, outcome)
 
-    def downloaded_range(self, key, category, start, stop, size):
+    def _expire_ranges(self, now):
+        while self.download_ranges and next(iter(self.download_ranges.values()))['seen'] <= now - 86400:
+            self.download_ranges.popitem(last=False)
+
+    def downloaded_range(self, key, start, stop, size):
         """Count full byte coverage, not each connection, HEAD, or video seek.
 
         ponytail: in-flight coverage is bounded to 1024 client/resource pairs and
@@ -108,12 +113,12 @@ class TransferActivity:
             return
         now = self.clock()
         with self.lock:
-            while self.download_ranges:
-                first = next(iter(self.download_ranges))
-                if len(self.download_ranges) < 1024 and self.download_ranges[first]['seen'] > now - 86400:
-                    break
-                self.download_ranges.popitem(last=False)
-            entry = self.download_ranges.pop(key, {'seen': now, 'ranges': [], 'complete': False})
+            self._expire_ranges(now)
+            entry = self.download_ranges.pop(key, None)
+            if entry is None:
+                if len(self.download_ranges) >= 1024:
+                    self.download_ranges.popitem(last=False)
+                entry = {'seen': now, 'ranges': [], 'complete': False}
             if entry['complete']:
                 # Range probes/retries after completion must not multiply totals.
                 if start != 0 or now - entry['seen'] < 10:
@@ -131,7 +136,7 @@ class TransferActivity:
                     merged.append((left, right))
             entry.update(seen=now, ranges=merged)
             if size > 0 and merged == [(0, size)]:
-                self.totals['media'][category + '_downloads'] += 1
+                self.totals['media']['single_downloads'] += 1
                 entry['complete'] = True
                 entry['ranges'] = []
             # Bound pathological fragmented downloads as well as client count.
@@ -151,8 +156,8 @@ class TransferActivity:
                     # assigned segment, or stop reading at Content-Length.
                     # Record bytes handed out, without waiting for source EOF
                     # or its cleanup/network calls to finish.
-                    category, start, size, client = download
-                    self.downloaded_range((key, client), category,
+                    start, size, client = download
+                    self.downloaded_range((key, client),
                         start + min(done - len(chunk), total), start + min(done, total), size)
                 yield chunk
             if done >= total:
