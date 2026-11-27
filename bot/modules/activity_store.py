@@ -37,8 +37,11 @@ class ActivityStore:
                 phases = self.tracker.checkpoint()
                 if phases != self.last_saved:
                     timestamp = datetime.now(timezone.utc)
-                    await collection.update_one({'_id': 'transfer_activity'},
-                        {'$set': {'phases': phases, 'updated_at': timestamp}}, upsert=True)
+                    # Update only fields we own so historical counters remain in MongoDB.
+                    updates = {f'phases.{kind}.{field}': value
+                               for kind, totals in phases.items() for field, value in totals.items()}
+                    updates['updated_at'] = timestamp
+                    await collection.update_one({'_id': 'transfer_activity'}, {'$set': updates}, upsert=True)
                     self.last_saved = phases
                     self.tracker.saved_state('saved', timestamp.isoformat())
                 else:
@@ -55,8 +58,9 @@ class ActivityStore:
             while not stop.is_set():
                 await self.flush()
                 try:
-                    await asyncio.wait_for(stop.wait(), timeout=5)
-                except asyncio.TimeoutError:
+                    async with asyncio.timeout(5):
+                        await stop.wait()
+                except TimeoutError:
                     pass
         finally:
             await self.flush()
