@@ -1,5 +1,19 @@
 # Changelog
 
+## v3.0.0
+
+- Rewrite the bot, HTTP origin, personal library, worker repair and activity
+  tracking in Go with gotd/td for MTProto media reads.
+- Preserve existing MongoDB file codes, collection names, access grants, session
+  hashes, encrypted repair credentials and cumulative counters.
+- Bound active HTTP media connections and ordered look-ahead alongside global
+  Telegram read concurrency. Refresh references on the downloading bot.
+- Supply Linux AMD64 and FreeBSD AMD64 binaries, a native process-lock launcher,
+  deployment documentation and regression tests.
+- Carry the configured filename and MIME type to downloads, including APKs.
+- Add authenticated transfer Stop forwarding to the Cloudflare Worker.
+
+
 ## v2.0.36
 
 - Run the cron-managed bot as a single process. The app holds the existing lock
