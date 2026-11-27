@@ -1,12 +1,8 @@
-import asyncio
-import io
 import os
 import re
-import tempfile
 import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
-from zipfile import ZipFile
 
 with patch.dict(os.environ, {
     'TELEGRAM_API_ID': '12345', 'TELEGRAM_API_HASH': 'test_hash',
@@ -14,13 +10,8 @@ with patch.dict(os.environ, {
     'OWNER_ID': '12345', 'DATABASE_URL': 'mongodb://localhost:27017',
     'SPACE_ID': 'user/app', 'SPACE_HOST': 'user-app.hf.space',
 }, clear=True):
-    from bot import clients
-    from bot.modules import decorators, index_zip, personal_library as library
-    from bot.modules.archive_cache import ArchiveCache
-    from bot.server import catalog, instance, main
-    from quart import Response
-    with patch.object(clients.TelegramBot, 'add_handler'):
-        from bot.plugins import callback, personal_index, files
+    from bot.modules import personal_library as library
+    from bot.server import instance
 
 
 async def csrf(response):
@@ -48,22 +39,10 @@ class PersonalLibraryTests(unittest.IsolatedAsyncioTestCase):
 
         storage = SimpleNamespace(insert_one=insert, find_one=find, find_one_and_delete=consume, delete_one=delete)
         first, other = instance.test_client(), instance.test_client()
-        folder_id = 'a' * 43
-        folder = {'_id': folder_id, 'user_id': 111, 'name': 'My files'}
         names = {111: 'first-user.apk', 222: 'second-user.pdf'}
 
-        async def listing(user_id, tab, *args):
-            self.assertEqual(tab, 'single')
+        async def listing(user_id, *args):
             return [dict(code=str(user_id), file_name=names[user_id], file_size=6)], 1, 1, 1
-
-        async def folder_lookup(requested, user_id):
-            return folder if requested == folder_id and user_id == 111 else None
-
-        async def rename(requested, user_id, name):
-            if await folder_lookup(requested, user_id):
-                folder['name'] = name
-                return True
-            return False
 
         grants = {111, 222}
 
@@ -72,10 +51,7 @@ class PersonalLibraryTests(unittest.IsolatedAsyncioTestCase):
 
         with patch.object(library.db, 'db', {'library_sessions': storage,
                                              'bot_access': SimpleNamespace(find_one=find_grant)}), \
-             patch.object(library, 'page_items', side_effect=listing) as get_items, \
-             patch.object(library, 'folder_by_id', side_effect=folder_lookup), \
-             patch.object(library, 'rename_folder', side_effect=rename), \
-             patch.object(library, 'folder_files', AsyncMock(return_value=[])):
+             patch.object(library, 'page_items', side_effect=listing) as get_items:
             root = await first.get('/index', scheme='https')
             self.assertIn('Open Telegram bot', await root.get_data(as_text=True))
             self.assertIn('no-store', root.headers['Cache-Control'])
@@ -90,218 +66,47 @@ class PersonalLibraryTests(unittest.IsolatedAsyncioTestCase):
                 values = {'csrf': await csrf(form), 'token': token}
                 self.assertEqual((await browser.post('/index/sign-in', form=values, scheme='https')).status_code, 303)
                 self.assertEqual((await browser.post('/index/sign-in', form=values, scheme='https')).status_code, 400)
-                response = await browser.get('/index?tab=single', scheme='https')
+                response = await browser.get('/index', scheme='https')
                 body = await response.get_data(as_text=True)
                 self.assertIn(names[user_id], body)
                 self.assertNotIn(names[333 - user_id], body)
 
-            folder_path = f'/index/folder/{folder_id}'
-            self.assertEqual((await other.get(folder_path, scheme='https')).status_code, 404)
-            other_page = await other.get('/index?tab=single', scheme='https')
-            response = await other.post(folder_path + '/rename', scheme='https',
-                                        form={'csrf': await csrf(other_page), 'name': 'Other name'})
-            self.assertEqual(response.status_code, 404)
-            own_folder = await first.get(folder_path, scheme='https')
-            response = await first.post(folder_path + '/rename', scheme='https',
-                                        form={'csrf': await csrf(own_folder), 'name': 'Renamed.zip'})
-            self.assertEqual(response.status_code, 303)
-            self.assertEqual(folder['name'], 'Renamed')
-            self.assertEqual((await first.post('/index/sign-out', form={'csrf': await csrf(own_folder)},
+            own_page = await first.get('/index', scheme='https')
+            self.assertEqual((await first.post('/index/sign-out', form={'csrf': await csrf(own_page)},
                                               scheme='https')).status_code, 303)
-            self.assertEqual((await first.get(folder_path, scheme='https')).status_code, 302)
+            signed_out = await first.get('/index', scheme='https')
+            self.assertNotIn(names[111], await signed_out.get_data(as_text=True))
             grants.remove(222)
-            revoked = await other.get('/index?tab=single', scheme='https')
+            revoked = await other.get('/index', scheme='https')
             self.assertNotIn(names[222], await revoked.get_data(as_text=True))
 
-    async def test_bot_collects_fifty_uploads_and_returns_named_folder_link(self):
-        folder_id = 'a' * 43
-        draft = None
-        uploads = []
-        folder_members = [dict(code=f'member-{i}', file_name=f'File {i} & extras.apk', file_size=10)
-                          for i in range(1, 51)]
+    async def test_old_folder_files_appear_as_individual_downloads(self):
+        item = dict(code='old-file', file_name='Episode.mkv', file_size=6,
+                    mime_type='video/x-matroska', personal_index_id='legacy-folder')
+        cursor = SimpleNamespace(to_list=AsyncMock(return_value=[item]))
+        cursor.sort = cursor.skip = cursor.limit = lambda *args: cursor
 
-        async def start(user_id, name, chat_id, *, topic_id=None):
-            nonlocal draft
-            draft = dict(_id=folder_id, user_id=user_id, name=name)
+        def find(query):
+            self.assertEqual(query['user_id'], 111)
+            self.assertNotIn('personal_index_id', query)
+            return cursor
 
-        async def active(user_id, chat_id, *, topic_id=None):
-            return draft if draft and draft['user_id'] == user_id else None
+        db = SimpleNamespace(count_documents=AsyncMock(return_value=1), find=find)
+        with patch.object(library, 'session_user', AsyncMock(return_value=111)), \
+             patch.object(library.db, 'direct_files', db):
+            response = await instance.test_client().get('/index', scheme='https')
+        self.assertEqual(response.status_code, 200)
+        body = await response.get_data(as_text=True)
+        self.assertIn('Episode.mkv', body)
+        self.assertIn('/dl/old-file', body)
+        self.assertIn('/stream/old-file', body)
+        self.assertNotIn('Download ZIP', body)
 
-        async def finish(folder, name):
-            nonlocal draft
-            self.assertEqual(folder['_id'], folder_id)
-            self.assertEqual(name, 'My fifty files')
-            draft = None
-
-        async def save(**item):
-            uploads.append(item)
-            return {'code': f'upload-{len(uploads)}'}
-
-        async def count(user_id, target):
-            return sum(item['personal_index_id'] == target and item['user_id'] == user_id for item in uploads)
-
-        def message(user_id, text=None):
-            return SimpleNamespace(from_user=SimpleNamespace(id=user_id), text=text, reply_to_message=None,
-                reply=AsyncMock(return_value=SimpleNamespace(edit_text=AsyncMock())), video=None, document=None,
-                copy=AsyncMock(return_value=SimpleNamespace(id=42)))
-
-        with patch.object(decorators, 'has_access', AsyncMock(return_value=True)), \
-             patch.object(library.Telegram, 'CHANNEL_ID', -1001234), \
-             patch.multiple(library, create_folder=start, active_folder=active, finish_folder=finish, folder_count=count), \
-             patch.object(files, 'get_file_properties', return_value=('File.apk', 10, 'application/octet-stream', 0, 'N/A')), \
-             patch.object(files, 'save_file', side_effect=save), \
-             patch.object(library, 'folder_files', AsyncMock(return_value=folder_members)) as members, \
-             patch.object(catalog, 'create_archive', AsyncMock(return_value='b' * 43)) as create:
-            await personal_index.index_command(None, message(111, '/index'))
-            await asyncio.gather(*(files.handle_user_file(None, message(111)) for _ in range(50)),
-                                 files.handle_user_file(None, message(222)))
-            close = message(111, '/index My fifty files')
-            await personal_index.index_command(None, close)
-            await files.handle_user_file(None, message(111))
-        self.assertEqual(sum(item['personal_index_id'] == folder_id for item in uploads), 50)
-        self.assertEqual([item['user_id'] for item in uploads if not item['personal_index_id']], [222, 111])
-        self.assertTrue(all(item['personal'] for item in uploads))
-        members.assert_awaited_once_with(111, folder_id)
-        create.assert_awaited_once_with(folder_members, 'My fifty files.zip', folder_id=folder_id, user_id=111)
-        url = f'{library.Server.BASE_URL}/index/archive/{"b" * 43}/My%20fifty%20files.zip'
-        text, = close.reply.call_args.args
-        self.assertEqual(text, f'<b>ZIP download</b>\n<b>My fifty files.zip</b> · 50 files\n\n'
-                               f'Copy link\n<code>{url}</code>')
-        button = close.reply.call_args.kwargs['reply_markup'].inline_keyboard[0][0]
-        self.assertEqual((button.text, button.url), ('Download', url))
-
-    async def test_telegram_zip_starts_before_the_archive_is_complete(self):
-        from urllib.parse import urlsplit
-        from hydrogram.enums import ChatType
-
-        folder_id = 'a' * 43
-        folder = dict(_id=folder_id, user_id=111, name='My ZIP')
-        members = [dict(code='one', file_name='File.apk', file_size=4)]
-        with tempfile.TemporaryDirectory() as directory:
-            cache = ArchiveCache(directory, 1024 * 1024)
-            tickets = {}
-            release, source_open = asyncio.Event(), asyncio.Event()
-
-            async def insert(ticket):
-                tickets[ticket['_id']] = ticket
-
-            async def source(code, **options):
-                self.assertTrue(options['internal'])
-                async def body():
-                    yield b'PK'
-                    source_open.set()
-                    await release.wait()
-                    yield b'12'
-                return Response(body(), headers={'Content-Length': '4'})
-
-            message = SimpleNamespace(chat=SimpleNamespace(type=ChatType.PRIVATE),
-                edit_text=AsyncMock())
-            query = SimpleNamespace(data=f'zip:stream:{folder_id}', message=message,
-                from_user=SimpleNamespace(id=111), answer=AsyncMock())
-            storage = SimpleNamespace(insert_one=insert, find_one=AsyncMock(side_effect=lambda q: tickets.get(q['_id'])))
-            task = None
-            try:
-                with patch.object(catalog, 'archive_cache', cache), \
-                     patch.object(library.db, 'db', {'download_tickets': storage}), \
-                     patch.object(decorators, 'has_access', AsyncMock(return_value=True)), \
-                     patch.object(library, 'folder_by_id', AsyncMock(return_value=folder)) as lookup, \
-                     patch.object(library, 'folder_files', AsyncMock(return_value=members)), \
-                     patch.object(main, 'transmit_file', side_effect=source):
-                    await callback.manage_callback(None, query)
-                    lookup.assert_awaited_once_with(folder_id, 111)
-                    query.answer.assert_awaited_once()
-                    task = index_zip._jobs[(111, folder_id)]
-                    await asyncio.wait_for(source_open.wait(), 1)
-                    await asyncio.wait_for(task, 1)
-                    message.edit_text.assert_awaited_once()
-                    self.assertEqual(len(tickets), 1)
-                    token = next(iter(tickets))
-                    text, = message.edit_text.call_args.args
-                    button = message.edit_text.call_args.kwargs['reply_markup'].inline_keyboard[0][0]
-                    self.assertEqual(button.text, 'Download')
-                    self.assertIn(f'<code>{button.url}</code>', text)
-                    path = urlsplit(button.url).path
-                    self.assertEqual(path, f'/index/archive/{token}/My%20ZIP.zip')
-                    self.assertFalse(cache.jobs[token]['task'].done())
-                    part = await asyncio.wait_for(instance.test_client().get(path, headers={'Range': 'bytes=0-1'}), 1)
-                    self.assertEqual(part.status_code, 206)
-                    self.assertEqual(await part.get_data(), b'PK')
-                    release.set()
-                    await asyncio.wait_for(cache.jobs[token]['task'], 1)
-                    response = await instance.test_client().get(path)
-                    self.assertIn('attachment', response.headers['Content-Disposition'])
-                    with ZipFile(io.BytesIO(await response.get_data())) as archive:
-                        self.assertEqual(archive.read('01-File.apk'), b'PK12')
-            finally:
-                if task and not task.done():
-                    task.cancel()
-                    await asyncio.gather(task, return_exceptions=True)
-                await cache.close()
-
-    async def test_telegram_zip_choice_rejects_other_users_folder(self):
-        from hydrogram.enums import ChatType
-
-        folder_id = 'a' * 43
-        query = SimpleNamespace(data=f'zip:prepare:{folder_id}', from_user=SimpleNamespace(id=222),
-            message=SimpleNamespace(chat=SimpleNamespace(type=ChatType.PRIVATE)), answer=AsyncMock())
-        with patch.object(decorators, 'has_access', AsyncMock(return_value=True)), \
-             patch.object(library, 'folder_by_id', AsyncMock(return_value=None)) as lookup, \
-             patch.object(catalog, 'create_archive', AsyncMock()) as create:
-            await callback.manage_callback(None, query)
-            lookup.assert_not_awaited()
-            self.assertIn('/catalog', query.answer.call_args.args[0])
-            query.data = f'zip:stream:{folder_id}'
-            await callback.manage_callback(None, query)
-        lookup.assert_awaited_once_with(folder_id, 222)
-        self.assertTrue(query.answer.call_args.kwargs['show_alert'])
-        create.assert_not_awaited()
-
-    async def test_shared_folder_zip_can_resume_without_library_session(self):
-        folder_id = 'a' * 43
-        folder = {'_id': folder_id, 'user_id': 111, 'name': 'My fifty files'}
-        members = [dict(code=str(i), file_name=f'File-{i}.apk', file_size=4) for i in range(50)]
-        tickets = {}
-
-        async def insert(ticket):
-            tickets[ticket['_id']] = ticket
-
-        async def source(code, **options):
-            self.assertTrue(options['internal'])
-            return Response(b'PK' + int(code).to_bytes(2))
-
-        store = SimpleNamespace(insert_one=insert, find_one=AsyncMock(side_effect=lambda q: tickets.get(q['_id'])))
-        browser, manager = instance.test_client(), instance.test_client()
-        with tempfile.TemporaryDirectory() as directory:
-            cache = ArchiveCache(directory, 1024 * 1024)
-            try:
-                with patch.object(catalog, 'archive_cache', cache), \
-                     patch.object(library.db, 'db', {'download_tickets': store}), \
-                     patch.object(library, 'folder_by_id', AsyncMock(return_value=folder)), \
-                     patch.object(library, 'folder_count', AsyncMock(return_value=50)), \
-                     patch.object(library, 'folder_files', AsyncMock(return_value=members)) as owned, \
-                     patch.object(main, 'transmit_file', side_effect=source):
-                    path = f'/index/share/{folder_id}'
-                    landing = await browser.get(path, scheme='https')
-                    html = await landing.get_data(as_text=True)
-                    self.assertIn('50 files', html)
-                    self.assertNotIn('Prepare first', html)
-                    self.assertEqual(tickets, {})
-                    response = await browser.post(path, form={'csrf': await csrf(landing)}, scheme='https')
-                    self.assertEqual(response.status_code, 303)
-                    token = next(iter(tickets))
-                    await asyncio.wait_for(cache.jobs[token]['task'], 2)
-                    self.assertEqual(tickets[token]['mode'], 'stream')
-                    link = response.headers['Location']
-                    result = await manager.get(link, scheme='https')
-                    self.assertEqual(result.status_code, 200)
-                    self.assertIn('My fifty files.zip', result.headers['Content-Disposition'])
-                    with ZipFile(io.BytesIO(await result.get_data())) as archive:
-                        self.assertEqual(len(archive.namelist()), 50)
-                        self.assertIsNone(archive.testzip())
-                        self.assertEqual(archive.read('50-File-49.apk'), b'PK\x001')
-                    part = await manager.get(link, scheme='https', headers={'Range': 'bytes=0-3'})
-                    self.assertEqual(part.status_code, 206)
-                    self.assertEqual(await part.get_data(), b'PK\x03\x04')
-                    self.assertEqual(owned.call_args.args, (111, folder_id))
-            finally:
-                await cache.close()
+    async def test_batch_routes_and_old_folder_links_are_gone(self):
+        client = instance.test_client()
+        old_id = 'x' * 43
+        for path in (f'/index/archive/{old_id}/old.zip', f'/index/archive/{old_id}/status',
+                     f'/index/prepare/{old_id}', f'/index/share/{old_id}', f'/index/folder/{old_id}'):
+            with self.subTest(path=path):
+                self.assertEqual((await client.get(path)).status_code, 404)
+        self.assertEqual((await client.post(f'/index/share/{old_id}')).status_code, 404)
