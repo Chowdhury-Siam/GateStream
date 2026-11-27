@@ -12,6 +12,12 @@ jobs:
         with:
           go-version-file: go.mod
       - run: go test -race ./...
+      - name: Test relative executable invocation
+        run: |
+          mkdir -p bin
+          go test -c -o bin/gatestream-linux-tests .
+          bin/gatestream-linux-tests -test.v -test.timeout=1m -test.run='^Test(LockRecoveryAfterSignalsAndCrash|WatchdogDuplicatePreventionAndExecRestart)$'
+          rm bin/gatestream-linux-tests
       - run: go vet ./...
       - run: /bin/sh scripts/test-deployment.sh
       - name: Build release binaries
@@ -48,10 +54,24 @@ jobs:
         uses: vmactions/freebsd-vm@v1
         with:
           release: '14.3'
-          copyback: false
+          copyback: true
           run: |
-            set -eu
-            chmod 700 bin/gatestream-freebsd-amd64 bin/gatestream-freebsd-tests
-            /bin/sh start.sh --version
-            /bin/sh scripts/test-deployment.sh
-            bin/gatestream-freebsd-tests -test.v -test.timeout=5m
+            set -u
+            status=0
+            /bin/sh scripts/test-freebsd.sh > freebsd-test.log 2>&1 || status=$?
+            cat freebsd-test.log
+            # Let the VM action copy back the log before failing the job.
+            printf '%s\n' "$status" > freebsd-test.status
+      - name: Check FreeBSD result
+        run: |
+          status=$(cat freebsd-test.status)
+          exit "$status"
+      - name: Upload FreeBSD test log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gatestream-freebsd-test-log
+          path: |
+            freebsd-test.log
+            freebsd-test.status
+          if-no-files-found: warn
