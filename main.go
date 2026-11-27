@@ -15,6 +15,7 @@ import (
 	"regexp"
 	"runtime"
 	"runtime/debug"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -56,7 +57,7 @@ func main() {
 	}
 }
 func run() error {
-	if len(os.Args) > 1 && os.Args[1] == "--version" {
+	if slices.Contains(os.Args[1:], "--version") {
 		fmt.Println("GateStream", version)
 		return nil
 	}
