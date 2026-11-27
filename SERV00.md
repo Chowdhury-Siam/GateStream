@@ -14,17 +14,19 @@ ssh LOGIN@SSH_HOST
 devil binexec on
 ```
 
-Reconnect SSH after enabling Binexec. Extract the release into your chosen
-application directory. The examples below use `~/GateStream`; substitute
-that directory consistently, including the absolute Cron path.
+Reconnect SSH after enabling Binexec. Extract the project into your chosen
+application directory. The examples below use `~/GateStream`. Substitute your
+directory consistently, including the absolute Cron path. With a GitHub source
+archive or checkout, install the binary using the download steps below. With the
+bundled ZIP, run `chmod 700 bin/gatestream-linux-amd64 bin/gatestream-freebsd-amd64`
+and verify both binaries with `/bin/sh scripts/check-release.sh`.
 
 ```sh
 cd ~/GateStream
 uname -s
 uname -m
-chmod 700 start.sh scripts/watchdog.sh bin/gatestream-*
-./start.sh --version
-/bin/sh scripts/check-release.sh
+chmod 700 start.sh scripts/watchdog.sh
+/bin/sh start.sh --version
 ```
 
 FreeBSD AMD64 reports `FreeBSD` and `amd64`. The launcher automatically selects
@@ -42,6 +44,53 @@ chmod 600 .env
 On upgrades, retain your actual configuration, `sessions-go/`, and each original
 `bot_main.session` / matching `worker_N.session` if present. Legacy peer tables
 are read without modification. Keep the existing database name and contents.
+
+## Download a versioned binary
+
+Choose a published tag from [GitHub Releases](https://github.com/Chowdhury-Siam/GateStream/releases).
+Each release has direct downloads for FreeBSD AMD64, Linux AMD64, and the
+`SHA256SUMS` manifest. For example, once `v3.0.2` is published:
+
+- [FreeBSD AMD64](https://github.com/Chowdhury-Siam/GateStream/releases/download/v3.0.2/gatestream-freebsd-amd64)
+- [Linux AMD64](https://github.com/Chowdhury-Siam/GateStream/releases/download/v3.0.2/gatestream-linux-amd64)
+- [SHA256SUMS](https://github.com/Chowdhury-Siam/GateStream/releases/download/v3.0.2/SHA256SUMS)
+
+From the project directory on Serv00, stage the FreeBSD binary and verify its
+checksum and version. You can do this before stopping a running bot. Set `tag`
+to the published version you want and keep the same SSH session for the next step.
+
+```sh
+tag=v3.0.2
+asset=gatestream-freebsd-amd64
+url="https://github.com/Chowdhury-Siam/GateStream/releases/download/$tag"
+mkdir -p bin
+stage=$(mktemp -d "$PWD/bin/.gatestream-download.XXXXXX")
+(
+    set -eu
+    cd "$stage"
+    curl -fsSL -o "$asset.download" "$url/$asset"
+    curl -fsSL -o SHA256SUMS "$url/SHA256SUMS"
+    expected=$(awk -v name="$asset" '$2 == name { print $1 }' SHA256SUMS)
+    actual=$(sha256 -q "$asset.download")
+    if [ -z "$expected" ] || [ "$actual" != "$expected" ]; then
+        echo 'FreeBSD binary checksum verification failed.' >&2
+        exit 1
+    fi
+    chmod 700 "$asset.download"
+    version=$("./$asset.download" --version)
+    if [ "$version" != "GateStream ${tag#v}" ]; then
+        printf 'Expected GateStream %s, got %s\n' "${tag#v}" "$version" >&2
+        exit 1
+    fi
+    mv "$asset.download" "$asset"
+    printf 'Verified %s in %s\n' "$version" "$stage"
+)
+```
+
+After verification succeeds, install into a new checkout with
+`mv "$stage/$asset" "bin/$asset"`. For an existing installation, follow the
+upgrade steps below. The download manifest verifies the selected binary.
+`scripts/check-release.sh` verifies both binaries supplied together in a ZIP.
 
 ## Reserve the HTTP port
 
@@ -195,17 +244,43 @@ numeric PID with `ps`, then send `kill -TERM PID`. Ctrl+C stops a foreground
 run. The server drains HTTP, cancels tasks and reads, checkpoints statistics,
 and disconnects Telegram and MongoDB. Keep the lock file in place.
 
-Extract a new release into a clean directory, transfer configuration/sessions,
-and verify its version before starting. Update the Cron path if it changes.
-Do not overwrite a running executable in place. Restore recovery Cron after
-checking the upgraded application. See `MIGRATION.md` for rollback details.
+For an existing Go installation using the current launchers, download and
+verify the new FreeBSD binary as shown above. After disabling Cron and waiting
+for the old process to exit, back up the old binary and install the verified one.
+
+```sh
+cp -p "bin/$asset" "$stage/previous" &&
+    mv "$stage/$asset" "bin/$asset" &&
+    /bin/sh start.sh --version
+```
+
+Start with `/bin/sh start.sh`, then check `/health` and a download from a second
+SSH session. Restore the recovery Cron entry after verification. This upgrade
+uses the same project directory, configuration, sessions, database and Cron path.
+Keep the staging directory for rollback. To roll back, disable Cron and stop
+the upgraded process, then run `mv "$stage/previous" "bin/$asset"`, start the
+previous version and restore Cron after verification.
+
+For a migration from the Python version or a release that also updates the
+launchers, follow `MIGRATION.md`. Extract the full package into a clean directory,
+transfer configuration and sessions, and update the Cron path if it changes.
+
+## Publish a release from GitHub
+
+In the GitHub repository, push a new `vX.Y.Z` Git tag on the commit you want to
+release. The tag must match the version printed by the app. GitHub Actions
+builds both AMD64 binaries, creates `SHA256SUMS`, and publishes the release
+after the assets are uploaded.
+An existing published tag is left untouched. Use a new application version and
+tag for a corrected release. If a run leaves an unpublished draft, review or
+remove that draft before retrying.
 
 ## Troubleshooting
 
 | Symptom | Check |
 | --- | --- |
 | Permission denied | Enable Binexec, reconnect SSH, and make the binary executable. Running the wrappers via `/bin/sh` does not fix a non-executable binary. |
-| Binary missing or exec format error | Check `uname -s` / `uname -m`, unpack the complete release, and verify `bin/SHA256SUMS`. The FreeBSD host needs the FreeBSD binary. |
+| Binary missing or exec format error | Check `uname -s` / `uname -m` and verify the FreeBSD AMD64 binary against the matching release manifest. |
 | Bind operation not permitted | Confirm the effective `.env` port is reserved with `devil port list`; check environment overrides. |
 | Port already in use | Stop the earlier bot gracefully. A different installation directory has a separate lock. |
 | Second launch exits silently | The current project already has an instance holding its lock; check the process list and `/health`. |
