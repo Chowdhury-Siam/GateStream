@@ -1,13 +1,11 @@
 from hydrogram import Client
 from hydrogram.types import CallbackQuery
 from bot.config import Telegram
-from bot.clients import TelegramBot
 from hydrogram.enums import ChatType, ParseMode
-from bot.modules.access import group_id, is_file_topic, is_owner
+from bot.modules.access import group_id, is_owner
 from bot.database.files import get_file, delete_file
 from bot.modules.decorators import verify_user
 from bot.modules.telegram import get_message
-from bot.modules.index_zip import select_zip
 
 @Client.on_callback_query()
 @verify_user
@@ -15,8 +13,6 @@ async def manage_callback(bot, q: CallbackQuery):
     query = q.data or ''
     if query.startswith('menu:'):
         return await menu_callback(q, query.removeprefix('menu:'))
-    if query.startswith('zip:'):
-        return await select_zip(q)
 
     if query.startswith('rm_'):
         code = query[3:]
@@ -76,12 +72,6 @@ async def menu_callback(query, action):
         if chat_id:
             text += f'\nGroup ID: {chat_id}'
         return await query.answer(text, show_alert=True)
-    if action == 'index':
-        if group_id(message) is not None and not await is_file_topic(message):
-            return await query.answer('Open Index in the File To Link topic.', show_alert=True)
-        from bot.plugins.personal_index import personal_index
-        await query.answer()
-        return await personal_index(message, user_id=user_id)
     if action == 'library' and message.chat.type == ChatType.PRIVATE:
         from bot.modules.personal_library import send_login_link
         await query.answer()
