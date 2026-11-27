@@ -1,6 +1,6 @@
 # GateStream on Serv00 / FreeBSD
 
-GateStream v2.0.34 supports Python 3.11+ with a single asyncio HTTP/Telegram
+GateStream v2.0.36 supports Python 3.11+ with a single asyncio HTTP/Telegram
 process. No root access, Docker, systemd, Bash, Linux `/proc`, or Linux allocator
 is required. The commands below describe Serv00; account limits and allowed
 long-running processes are determined by your current hosting plan.
@@ -78,7 +78,6 @@ BIND_ADDRESS=127.0.0.1
 PORT=YOUR_PORT
 BASE_URL=https://your-public-host.example
 MULTI_BOT_TOKENS=""
-ZIP_CACHE_MAX_MB=512
 MEDIA_CACHE_MAX_MB=64
 CACHE_FREE_MB=128
 HANDLER_WORKERS=2
@@ -133,7 +132,7 @@ MongoDB usernames/passwords as required by MongoDB URI syntax.
 An empty required value (such as `PORT` or the primary token) causes a clear
 validation failure. Empty optional tokens disable extra workers, empty repair
 credentials disable the legacy override, and empty `BASE_URL`/cache paths choose
-automatic defaults. Zero ZIP/media cache limits disable that cache. Negative
+automatic defaults. A zero media cache limit disables the cache. Negative
 limits are invalid. `MEMORY_RESTART_MB=0` disables memory-triggered restarts.
 
 Worker tokens accept commas, semicolons or whitespace. Duplicates, the primary
@@ -154,7 +153,7 @@ python -m bot
 ```
 
 In a POSIX `sh` session replace `source` with `.`. Logs show the application
-version, OS/Python version, bind address/port, ZIP limit, MongoDB ping result and
+version, OS/Python version, bind address/port, media cache limit, MongoDB ping result and
 connected/configured client counts. `HTTP server ready` appears only after the
 listener and ASGI startup succeed. Test from another SSH session:
 
@@ -165,8 +164,7 @@ curl -f http://127.0.0.1:YOUR_PORT/health
 Expect `OK` and an `X-GateStream-Version` header with `curl -i`. The listener is
 reserved before Telegram startup; a port conflict/permission failure exits with
 a nonzero status and closes resources. Ctrl+C or `kill -TERM APP_PID` drains
-HTTP requests up to `SHUTDOWN_TIMEOUT` (default 20 seconds), stops background ZIP
-work and Telegram clients, flushes counters and closes MongoDB. Allow cleanup to
+HTTP requests up to `SHUTDOWN_TIMEOUT` (default 20 seconds), stops background work and Telegram clients, flushes counters and closes MongoDB. Allow cleanup to
 finish before restarting. SIGKILL cannot perform cleanup. `/restart` and the
 memory guard run the same shutdown before replacing the process.
 
@@ -196,8 +194,8 @@ origin to the **public HTTPS reverse-proxy address**, and set the bot's `BASE_UR
 to the public Worker/custom domain used in file links. The Worker cannot reach
 Serv00's private loopback address. Preserve forwarding of `Range`, `If-Range`,
 `Content-Range`, `Content-Disposition` and anonymous download-group headers in
-your existing Worker. Check `/health`, a small single-file download and a resumed
-ZIP through the public domain. This GitHub package includes the Worker in `cloudflare/` and its deployment
+your existing Worker. Check `/health`, a small single-file download and resuming it
+through the public domain. This GitHub package includes the Worker in `cloudflare/` and its deployment
 workflow in `.github/workflows/`. See [CLOUDFLARE.md](CLOUDFLARE.md) for deployment.
 
 ## 7. Persistent operation and recovery
@@ -225,28 +223,23 @@ absolute paths (replace LOGIN and the actual home path):
 
 The launcher locates `.venv`, then `venv` in the project, then
 `~/.virtualenvs/gatestream`. For a different environment, set `GATESTREAM_PYTHON`
-to its absolute Python path in the Cron entry. The watchdog holds a project-local
-advisory lock while its child runs, so subsequent Cron invocations exit. It uses
-one extra supervisor process and does not grow a separate unbounded log. After a
-crash, the next Cron invocation retries; it does not spin in a restart loop.
-Disable that Cron entry before intentionally stopping the application, and stop
-both supervisor and child gracefully. Review failures in `event-log.txt` before
-allowing repeated retries. Hosting suspension/account expiry is outside the
-application's recovery control.
+to its absolute Python path in the Cron entry. The launcher replaces itself
+with the bot, which holds the project lock through graceful restarts. A
+duplicate Cron invocation exits immediately. After a crash, the next Cron
+invocation can start the app again. Disable the Cron entry before intentionally
+stopping the application and send SIGTERM to the `python -m bot` process.
+Review startup failures in `event-log.txt`.
+
+To check the app's own memory on FreeBSD, use
+`ps -ax -o pid,ppid,rss,command` and find `python -m bot`. RSS is reported in
+KiB. Compare readings with the same number of workers and similar traffic.
 
 ## 8. Limits and troubleshooting
 
-The ZIP limit is a disk budget, not an allocation of RAM. Keep ZIP and media
-limits below **remaining account quota**, after the virtual environment, source,
-sessions, logs and other applications. Disk-free APIs can report shared filesystem
-space rather than your individual quota. Writes can still hit `EDQUOT` or
-`ENOSPC`; partial cache files are removed and the transfer reports failure rather
-than publishing a corrupt ready ZIP. Media caching is optional and failed cache
-writes do not invalidate the source download. ZIPs exceeding admission capacity
-retain the existing direct-stream fallback. A cached ZIP that fails mid-build
-cannot transparently change to a different byte source under active range reads;
-retry with a new link after fixing quota. Completed ZIPs stay available for their
-existing lifetime to preserve resume; they are not evicted just to admit new work.
+Keep the media cache below the remaining account quota after accounting for
+the virtual environment, source files, sessions, logs and other applications.
+Shared filesystem space can differ from the account quota. If a cache write
+fails with `EDQUOT` or `ENOSPC`, GateStream can still stream the source directly.
 
 | Symptom | Check |
 | --- | --- |
@@ -256,7 +249,7 @@ existing lifetime to preserve resume; they are not evicted just to admit new wor
 | Proxy 502 | Local `/health`, target port/address, app readiness; upstream must use HTTP, public SSL is separate. |
 | `ACCESS_TOKEN_INVALID` | Replace that worker's actual BotFather token; blank `MULTI_BOT_TOKENS` disables extras. No commented sample is loaded. |
 | No-plugin warning on an old deployment | Upgrade the whole source. Active plugins use Hydrogram class decorators and explicit discovery, with commands/callbacks registered once. |
-| `No space left` / `Disc quota exceeded` | Check account quota in the panel, reduce both caches, remove unused files when the bot is stopped; shared disk free is not account quota. |
+| `No space left` / `Disc quota exceeded` | Check account quota in the panel, reduce the media cache, remove unused files when the bot is stopped; shared disk free is not account quota. |
 | Compiler/TgCrypto/cryptography installation errors | Verify Binexec and virtualenv Python; use provider-supported build tools. Already installed extensions need no OS replacement. |
 | Too many processes/threads / memory kill | Reduce extra workers, HTTP demand, IO/Motor/handler workers and transmission concurrency; leave RAM margin for the host. |
 | Shutdown executor error | Use `python -m bot` from this release, allow SIGTERM cleanup; do not embed the old `idle()`/manual loop launcher. |
