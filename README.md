@@ -1,175 +1,286 @@
-# GateStream 3.0.2
+<div align="center">
+  <img src="bot/server/templates/brand.svg" width="88" alt="GateStream gateway logo">
+  <h1>GateStream</h1>
+  <p><strong>Gateway to your media.</strong></p>
+  <p>Play and download your Telegram files.</p>
+</div>
 
-GateStream connects Telegram files to resumable HTTP downloads and browser
-playback. The bot, origin server, personal library, worker management, and
-statistics now run in Go.
+GateStream turns media in your Telegram channels into browser playback,
+direct downloads, and API links. The bot manages your catalog in MongoDB;
+the server retrieves media from Telegram as it streams. A dark interface,
+warm gold accents, and a gateway mark carry the identity from bot to browser.
 
-## Start
+## GateStream v2.0.38 — GitHub package
 
-The source packages include binaries for Linux AMD64 and FreeBSD AMD64.
+This complete GitHub package includes the updated Python origin, Telegram bot,
+web interface, Cloudflare Worker, GitHub Actions deployment workflow, Dockerfile,
+deployment guides and regression tests. See [CHANGELOG.md](CHANGELOG.md) for the
+configuration, worker startup, FreeBSD/resource and graceful shutdown fixes.
 
-1. Extract the package into a clean directory.
-2. Copy `.env.example` to `.env` and enter your existing configuration.
-3. Start the application.
+For Serv00/FreeBSD deployment, follow [SERV00.md](SERV00.md). Keep your existing
+`.env`, session files, database settings and Worker deployment name when upgrading.
+Install the updated `requirements.txt` before restarting.
 
-```sh
-chmod +x start.sh scripts/watchdog.sh bin/gatestream-*
-./start.sh
+## Choose your package
+
+| Package | Purpose |
+| --- | --- |
+| `GateStream-GitHub.zip` | Full source, Cloudflare Worker, GitHub Actions deployment, and tests |
+| `GateStream-Lite.zip` | Python bot and origin, without the Cloudflare Worker or GitHub workflow |
+
+Extract the ZIP and upload the **contents** of its project folder, so `README.md`,
+`Dockerfile`, and `bot/` sit at the repository root.
+
+**Deploy the bot:** [Hugging Face guide](HUGGING_FACE.md) or the local/Docker steps below.
+**Deploy the edge proxy:** [Cloudflare guide](CLOUDFLARE.md), included in the GitHub package.
+**Change the Telegram profile:** [Branding guide](BRANDING.md).
+
+## What you can do
+
+- **Save Telegram files.** Upload a file directly to get its own link.
+- **Follow transfers live.** The home page shows active links, HTTP connections, byte counts, progress, speed, elapsed time and ETA.
+- **Watch your way.** Play in the browser, resume playback, or open VLC or MX Player.
+- **Share a link.** Create stream, download, and API URLs; revoke access by removing a link.
+- **Maintain file records.** Inspect server stats, backfill durations, and back up or restore records.
+- **Add an edge entry point.** Deploy the optional Cloudflare streaming reverse proxy from GitHub Actions.
+
+Media remains in Telegram. Selected opening and ending chunks are cached on
+the host's disk. Extra bot tokens support parallel retrieval; actual speed
+depends on Telegram, your host, and the network. The Worker passes media through
+without buffering the whole file; it does not create a distributed media cache.
+
+## Quick start on a local machine or VPS
+
+Use Python 3.11 or newer, a MongoDB endpoint reachable from the host, and a
+Telegram bot created through BotFather. Give the bot access to your source channels.
+
+```bash
+git clone https://github.com/Chowdhury-Siam/GateStream.git GateStream
+cd GateStream
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env
 ```
 
-Use `SERV00.md` for FreeBSD shared hosting and `MIGRATION.md` for an existing
-installation. Configuration loads automatically at startup. The command
-`./start.sh --version` prints the application version. Startup from any directory
-uses the project configuration. Every launch shares the same duplicate-instance
-lock, including direct binary launches from the project directory.
+On Windows, activate with `.venv\Scripts\activate` and copy `.env.example` to `.env`.
+Fill in the required values below, set `BASE_URL` to your public server or Worker
+address, then start the bot:
 
-Use `scripts/watchdog.sh` for Cron recovery as documented in `SERV00.md`.
-The wrapper preserves startup errors for Cron mail. `/restart` and memory
-restarts replace the Go process; a crash is recovered by the next Cron run.
+```bash
+python -m bot
+```
 
-## Features
-
-- Automatic single-file links in private chat and the configured File To Link
-  group topic. Replies include the filename, a copyable URL and a Download button.
-- Correct filename and media type, including APK documents.
-- HTTP GET/HEAD, exact single byte ranges, resumable downloads, ETag/If-Range and
-  multiple client connections. Media bytes use MTProto through gotd/td.
-- Bounded concurrent Telegram reads, bounded active HTTP downloads, ordered
-  look-ahead, worker cooldowns and bounded reference refresh on the downloading
-  account. Playback and HEAD are excluded from completed-download counts.
-- A private personal library with one-time Telegram sign-in, search, pagination,
-  session expiry and owner-managed authorization.
-- Owner channel-file links, AniList classification, and optional MyAnimeList
-  and OMDb lookups.
-- Worker log-posting checks, private owner-account setup and paced worker repair.
-  Owner credentials and sessions use authenticated encryption before MongoDB storage.
-- Live transfer statistics, range completion deduplication, five-second MongoDB
-  checkpoints, and owner-only Stop controls after library sign-in.
-- Database backup/restore, duration refresh, rename, revoke, cache cleanup and
-  graceful restart/shutdown.
-
-The public download URLs remain `/dl/CODE`, player URLs remain `/stream/CODE`,
-and the file API remains `/api/file/CODE`. Read access to historical episode
-records and their existing metadata API remains available.
+Project repository: [Chowdhury-Siam/GateStream](https://github.com/Chowdhury-Siam/GateStream).
+Run only one deployment per main Telegram bot token.
 
 ## Configuration
 
-Precedence is system environment, `.env`, `config.env`, literal assignments in a
-legacy `start.sh`, then defaults. An exported empty value overrides file values.
-Comments and blank lines are ignored. Both quote styles, literal dollar signs,
-inline hashes, equals signs, CRLF and UTF-8 BOM are supported. Duplicate active
-keys use the last assignment in their file. Configuration files are parsed as
-data. Restart after changing settings.
+Use `.env` locally. Configuration precedence per key is system environment
+(including explicit empty values), `.env`, legacy `config.env`, literal `start.sh`
+assignments, then defaults. Comments and examples are never loaded. Empty optional
+worker tokens disable extras; invalid numeric values produce validation errors.
+All services use the same centralized configuration. See [SERV00.md](SERV00.md)
+for parser rules, resource limits, reserved ports and safe shutdown.
 
-Keep your current `DATABASE_NAME`, `DATABASE_URL`, `OMNI_MONGO_URI`, bot tokens,
-`OWNER_ID`, `TELEGRAM_CHANNEL_ID`, `BASE_URL` and reserved port when migrating.
-The defaults retain `OmniArchiver` and the existing upstream configuration key.
+On Hugging Face, use **Settings → Variables and secrets**;
+do not upload a filled `.env` file.
 
-`GO_MAX_PROCS` caps Go scheduler CPUs, with legacy `IO_WORKERS` as an alias.
-An exported `GOMAXPROCS` takes precedence.
+| Setting | Required | Purpose |
+| --- | --- | --- |
+| `TELEGRAM_API_ID` | Yes | Numeric Telegram API ID |
+| `TELEGRAM_API_HASH` | Yes | Telegram API hash |
+| `TELEGRAM_BOT_TOKEN` | Yes | Main BotFather token |
+| `OWNER_ID` | Yes | Your positive numeric Telegram user ID |
+| `DATABASE_URL` | Yes for hosted deployments | MongoDB URI; local default is `mongodb://localhost:27017` |
+| `BASE_URL` | Outside Spaces | Public URL used in generated links; Spaces otherwise uses `SPACE_HOST` |
+| `DATABASE_NAME` | No | Catalog database; legacy default retained as `OmniArchiver` |
+| `MULTI_BOT_TOKENS` | No | Additional bot tokens, separated by spaces or commas |
+| `TELEGRAM_CHANNEL_ID` | No | Storage channel for uploads, first-start notices, and worker checks |
+| `TELEGRAM_BOT_USERNAME` | No | Username fallback; detected from the bot when connected |
+| `OMNI_MONGO_URI` | No | Compatibility setting for a separate upstream catalog |
+| `PORT` | No | `8080` locally; `7860` in the Docker image and on Spaces |
+| `BIND_ADDRESS` | No | Listening address; defaults to `0.0.0.0` |
 
-`MAX_TRANSMISSIONS` bounds reads globally. `MAX_HTTP_CONNECTIONS` bounds media
-responses and their buffered look-ahead. `MEDIA_CACHE_MAX_MB` includes recognized
-legacy media chunks in its disk budget. Cache writes reserve `CACHE_FREE_MB`
-where filesystem information is available and tolerate quota errors.
+### Public host and Cloudflare
 
-`MEMORY_CLEAN_MB` sets Go's soft runtime memory limit. It guides garbage
-collection. `MEMORY_RESTART_MB` triggers a graceful restart if Go runtime memory
-exceeds the configured threshold. Set the latter to zero to disable restart.
-Go runtime memory statistics describe the application runtime. Hosting account
-RAM accounting can include other allocations and processes.
+On the bot host, `BASE_URL` is the address users should open. For your existing
+Worker deployment:
 
-## Telegram access
-
-Only `OWNER_ID` has access initially. Use `/auth USER_ID` or `/auth GROUP_ID`
-to grant access. In a group, `/auth` grants that group. `/unauth` removes access.
-
-Open the File To Link forum topic and send `/filetolink` as the owner. Files
-posted there receive links automatically. `/link` retries work in that topic.
-The bot needs permission to see ordinary group files. Grant appropriate group
-administrator permissions or configure privacy through BotFather.
-
-Use `/catalog` in private chat for the personal library. Group authorization
-allows file tools in that group. A direct user grant is required for that
-member's personal-library sign-in.
-
-Send `/workersetup` in the owner's private chat to connect the owner account.
-The HTTPS page accepts API ID, API hash, phone, login code and two-step password.
-It saves the encrypted session automatically. `/workerrepair` adds confirmed
-missing workers with at least 60 seconds between attempts. Telegram rate limits
-pause repair and preserve the next permitted attempt time.
-
-`COMMANDS.txt` can be copied into BotFather. The application also sets separate
-command menus for ordinary private users and the owner.
-
-## Cloudflare Worker
-
-The GitHub package includes `cloudflare/` and the existing deployment workflow.
-Set the Worker `ORIGIN_URL` to your public HTTPS origin and set the bot's
-`BASE_URL` to the Worker URL. Cookies, byte ranges and anonymous completion
-keys pass through the proxy. The origin enforces session and CSRF checks on
-private forms and transfer Stop actions.
-
-See `CLOUDFLARE.md` for repository variables and secrets. Keep those existing
-values when changing the origin runtime.
-
-## Build from source
-
-Go 1.25 or later is required to build. Build on a machine with sufficient RAM
-for the generated Telegram SDK. Use the supplied binary on small shared hosts.
-
-```sh
-go mod download
-CGO_ENABLED=0 GOGC=20 go build -p 1 -buildvcs=false -trimpath \
-  -ldflags='-s -w' -o bin/gatestream-linux-amd64 .
+```dotenv
+BASE_URL=https://your-worker.example
 ```
 
-Cross-compile for Serv00 from a development machine.
+In GitHub Actions settings, `CLOUDFLARE_ORIGIN_URL` is the **direct hosting
+address**, not a `/stream/...` link and not the Worker URL. Example:
 
-```sh
-GOOS=freebsd GOARCH=amd64 CGO_ENABLED=0 GOGC=20 \
-  go build -p 1 -buildvcs=false -trimpath -ldflags='-s -w' \
-  -o bin/gatestream-freebsd-amd64 .
+```text
+https://your-origin.example
 ```
 
-The runtime uses the Go HTTP server, gotd/td, the official MongoDB Go driver and
-a pure Go SQLite reader for importing existing Hydrogram peer tables. Database
-names, collection names, saved file codes, existing access grants, library
-sessions and transfer totals retain their existing representations.
+The GitHub version includes a workflow that accepts that setting as a repository
+Variable or Secret. Cloudflare credentials belong in GitHub Secrets. See the
+Cloudflare guide for all settings and the deployment steps.
+
+## Telegram access and commands
+
+The bot starts with access for `OWNER_ID` only. The owner manages access with
+`/auth` and `/unauth`. Grants are stored in the existing MongoDB database.
+
+| Action | Command |
+| --- | --- |
+| Authorize a user | `/auth USER_ID` or reply to their message with `/auth` |
+| Authorize a group | `/auth GROUP_ID` or send `/auth` in that group |
+| Revoke a grant | Use `/unauth` with the same ID, reply, or group |
+| Open the welcome menu | `/start` |
+| Read commands and instructions | `/help` |
+
+Use a positive Telegram ID for a user and a negative ID for a group.
+### File To Link group topic
+
+1. As the bot owner, open the **File To Link** topic and send `/filetolink`.
+   This saves the group ID and topic ID. To select a different topic, run the
+   same command there. If `/start` says the current topic differs from the
+   saved one, the owner can rebind it by sending `/filetolink` there as a new
+   message. A MongoDB read error is reported separately in the owner menu.
+2. Use `/auth` in the topic to grant group access if the group is new to
+   GateStream. Existing group and user grants apply.
+3. Give the bot access to ordinary messages in the group. A bot that is a
+   group admin receives them. If you disable group privacy in BotFather,
+   re-add the bot to the group for the change to take effect.
+4. Post a file in the topic to receive its link automatically. To request
+   a link again, reply to one of your own topic files with `/link`.
+
+Group uploads and group `/link` are scoped to that topic. Private uploads
+require a direct user grant.
+
+Owner tools include `/stats`, `/workers`, `/log`, `/sync_duration`,
+`/set_title`, `/revoke`, `/clean`, `/backup`, `/restore`, `/purge`,
+and `/restart`.
+
+## Worker diagnostics
+
+`/stats` shows connected bots, host resources, MongoDB library totals and live
+transfers. `/workers` asks every connected bot to post one silent check message
+to `TELEGRAM_CHANNEL_ID`. The private result lists only bots that could not
+post, with a reason such as offline, posting permission denied, or timed out.
+Use `/workers CHANNEL_ID` to send the check to a specific GateStream storage
+channel. A bot needs posting permission in the selected channel to pass.
+
+## HTTP endpoints
+
+| Endpoint | Response |
+| --- | --- |
+| `/` | GateStream landing page |
+| `/api/activity` | Live aggregate transfer counters and anonymous progress rows |
+| `/health`, `/ping` | `OK` when the web server is responding; `X-GateStream-Version` identifies the deployed release |
+| `/stream/<code>` | Browser player |
+| `/dl/<code>` | Download; add `?stream=1` for inline media |
+| `/api/file/<code>` | File details and links |
+| `/api/batch/<code>` | Batch details and episode links |
+
+Anyone holding a valid media URL can access it. Telegram user restrictions
+apply to bot commands. Share media you have
+permission to distribute.
 
 ## Docker
 
-```sh
+```bash
 docker build -t gatestream .
-docker run --rm --env-file .env -p YOUR_PORT:8080 \
-  -v gatestream-sessions:/app/sessions-go \
-  -v gatestream-cache:/app/cache gatestream
+docker run -d --name gatestream -p 8080:7860 --env-file .env -e PORT=7860 --restart unless-stopped gatestream
 ```
 
-Set `BIND_ADDRESS=0.0.0.0` and `PORT=8080` in the container environment for
-this mapping, or change the mapping to match the configured port. A loopback
-bind copied from shared hosting is unreachable through Docker port publishing. The image runs as an unprivileged user. Mount
-the previous `.session` files readably
-inside `/app` when importing private-channel peers from an earlier installation.
-Hugging Face Spaces can use the Dockerfile with its required bind address and
-port set through the platform environment. AlwaysData and Linux VPS hosts can
-run `start.sh` or a binary directly.
+Set `BASE_URL` for the public address mapped to this container.
 
-## Test
+## Live activity dashboard
 
-```sh
-go test -race ./...
-go vet ./...
-/bin/sh scripts/test-deployment.sh
+The home page shows the total number of individual files downloaded, with
+live bandwidth cards in an expandable panel. A completion means GateStream
+handed all file bytes to response streams. Overlapping ranges for the same
+anonymous client and file are combined. HEAD and inline playback do not
+increment download totals.
+
+In-flight range coverage is kept in memory for up to 24 hours and 1024 anonymous
+client/resource pairs (at most 256 disjoint ranges each). It resets on restart,
+so a download resumed across a server restart may not count as a new completion.
+Client grouping uses a non-public hash of connection address and user agent;
+clients sharing both may be grouped. New range sequences starting at byte zero
+after a ten-second completion grace can count again. These are server-side
+delivery totals, not exact per-person analytics. Completed totals persist using
+the same five-second MongoDB checkpoint as existing counters.
+
+Open the server or Worker home page to follow transfers live. The dashboard
+refreshes every two seconds while visible and slows polling in background tabs.
+Media links are counted separately from HTTP range connections. It shows data
+sent to viewers, completed requests, failures, incomplete transfers and server uptime.
+
+Active rows show progress, transferred/total bytes, average speed, elapsed time
+and ETA. Unknown-size downloads use an indeterminate progress bar. Summary
+throughput covers roughly five seconds. Only the latest 20 active rows are shown;
+all active transfers are included in the counters. On a network failure the
+previous values stay dimmed and the panel shows disconnected until it reconnects.
+
+The public endpoint exposes aggregate counts and anonymous activity numbers,
+without file names, URLs, file codes, credentials or user IDs.
+Cumulative bytes, completed counts and failed/incomplete counts are stored in
+MongoDB `analytics`, document `transfer_activity`. They are restored at startup,
+checkpointed every five seconds, and flushed during normal web shutdown and
+`/restart`. Active connections, active rows, current speeds and uptime remain
+live session values and correctly start at zero after a restart. Previously
+active transfers from the saved checkpoint are counted as incomplete.
+
+A hard kill or power loss can lose work since the last successful checkpoint
+(normally up to five seconds); a database outage can extend that window. Failed
+reads do not overwrite stored totals with zeros, failed writes are retried
+without adding totals twice, and the dashboard shows a save/restore warning.
+Chunks never wait for statistics database writes. Use the same `DATABASE_URL`
+and `DATABASE_NAME` to preserve totals. This uses one writer per deployment;
+it does not aggregate multiple replicas. Existing media bytes can be seeded
+from the older `analytics.bandwidth` record on first upgrade. Historical
+counts and other totals that were never saved cannot be reconstructed. The
+media-only `/backup` export does not include these analytics records; a full
+database backup does.
+
+Media byte totals measure bytes handed to HTTP responses, not proof a client
+saved a whole file. Failed/incomplete transfers retain their partial byte totals.
+Legacy checkpoint categories are retained for compatibility; their historical
+values are not erased and are not shown as active features on the home page.
+
+## Upgrading an existing deployment
+
+1. Back up the database with `/backup` and retain your current hosting settings.
+2. Use a clean source directory from the appropriate ZIP so retired plugins are
+   removed. Copy over your existing configuration and Telegram session files.
+   Keep the media cache if you want to reuse it. Batch ZIP caches from older releases are retired.
+3. Keep the current database names, bot tokens, and Worker name, then restart the host.
+4. Test `/health`, generate a file link, and check playback and seeking.
+
+This release retains MongoDB defaults
+`OmniArchiver` and `OmniArchiverDB`, `OMNI_MONGO_URI`, single-file codes and routes,
+Telegram session names, and the browser's existing resume keys. No database
+migration is needed. Renaming storage merely for branding could hide existing
+records, so these compatibility identifiers remain intentionally.
+
+The existing deployment target remains `ftl-stream-proxy` so the workflow can
+update your deployed Worker. To create a separately named Worker, set
+`CLOUDFLARE_WORKER_NAME=gatestream-proxy` and update the bot's `BASE_URL` after
+deployment; this is optional. You can also enter a Worker name directly under
+**GitHub Actions → Deploy GateStream Worker → Run workflow**. The form overrides
+the repository variable for that run only; save the repository variable to use
+the same name for automatic deployments.
+
+## Checks
+
+```bash
+python -m unittest discover -s tests -v
 node --test cloudflare/worker.test.mjs
 ```
 
-See `VALIDATION.md` for what was verified and what requires a live deployment.
-Upstream attribution is in `ACKNOWLEDGEMENTS.md`. Dependency notices accompany
-the supplied binaries under `third_party_licenses/`.
+The Node check applies to the GitHub package. Python checks use mocked services
+and do not need live Telegram or MongoDB connections.
 
-The Go CI workflow builds both platform binaries and makes them available as
-a downloadable artifact. Release ZIPs already contain executable binaries and
-`bin/SHA256SUMS`. Run `/bin/sh scripts/check-release.sh` to verify both hashes
-using the native FreeBSD or Linux SHA-256 utility. FreeBSD 14.3 execution is
-covered by a separate VM job when that workflow runs in your repository.
+## Project history
+
+GateStream is Siam's rebrand of OmniArchiver-F2L. See
+[ACKNOWLEDGEMENTS.md](ACKNOWLEDGEMENTS.md) for upstream attribution and
+[CHANGELOG.md](CHANGELOG.md) for recent changes.
