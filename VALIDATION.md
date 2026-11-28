@@ -1,3 +1,21 @@
+# v2.0.40 validation
+
+All 112 Python tests passed locally. Live stats coverage includes topic routing,
+owner-only access, changes to transfer counters, concurrent dashboard moves,
+failed deletion, restart recovery, and Telegram flood waits. The tests mock
+Telegram and MongoDB.
+
+All seven Cloudflare Worker tests passed locally.
+
+# v2.0.39 validation
+
+All 106 Python tests passed locally. The suite checks that Hydrogram parses
+the upload message into separate quotations and a copyable URL block, including
+Unicode filenames. It also verifies the download, stream, and revoke buttons
+and that `/link` retries use the same layout.
+
+All seven Cloudflare Worker tests passed locally.
+
 # v2.0.38 validation
 
 The Python regression suite passed all 106 tests on Linux. It covers the
