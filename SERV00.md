@@ -1,6 +1,6 @@
 # GateStream on Serv00 / FreeBSD
 
-GateStream v2.0.38 supports Python 3.11+ with a single asyncio HTTP/Telegram
+GateStream v2.0.40 supports Python 3.11+ with a single asyncio HTTP/Telegram
 process. No root access, Docker, systemd, Bash, Linux `/proc`, or Linux allocator
 is required. The commands below describe Serv00; account limits and allowed
 long-running processes are determined by your current hosting plan.
