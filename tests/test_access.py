@@ -244,7 +244,8 @@ class AccessTests(unittest.IsolatedAsyncioTestCase):
              patch.object(files, 'get_group_upload', AsyncMock(side_effect=[None, saved])), \
              patch.object(files, 'save_file', AsyncMock(return_value=saved)) as save:
             await files.handle_user_file(client, parsed)
-            self.assertIn('/dl/episode', status.edit_text.await_args.kwargs['text'])
+            caption = status.edit_text.await_args.kwargs['text']
+            self.assertIn('/dl/episode', caption)
             self.assertEqual(save.await_args.kwargs['source_key'], f'{chat_id}:43')
 
             client.message_cache.clear()
@@ -252,7 +253,7 @@ class AccessTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(parsed_command.message_thread_id, TOPIC)
             self.assertEqual(parsed_command.reply_to_message.document.file_name, 'Episode.mkv')
             await files.group_link_command(client, parsed_command)
-            self.assertIn('/dl/episode', client.send_message.await_args.kwargs['text'])
+            self.assertEqual(client.send_message.await_args.kwargs['text'], caption)
             self.assertEqual(client.send_message.await_args.kwargs['message_thread_id'], TOPIC)
             client.send_cached_media.assert_awaited_once()
 
