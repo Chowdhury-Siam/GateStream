@@ -1,43 +1,13 @@
 # Changelog
 
-## v3.0.2
+## v2.0.38
 
-- Resolve the test executable to an absolute path before subprocess launches and
-  exec restarts, including when CI invokes the compiled test binary relatively.
-- Add a relative-invocation regression check and stage-labelled FreeBSD checks
-  that retain the original failure status and upload the VM test log in CI.
-- Rebuild both packaged platform binaries with matching checksums.
+- Simplify file-to-link workflows and separate the welcome menu from command help.
+- Remove channel-post linking, automatic categories, personal web library, and worker repair. Existing links and worker diagnostics continue to work.
 
-## v3.0.1
+## v2.0.37
 
-- Update Serv00 deployment for the native Go binary, including executable
-  checks, checksums, automatic configuration, proxy setup and sparse Cron
-  environments. Remove obsolete runtime commands from current instructions.
-- Preserve watchdog diagnostics and exit codes; execute through POSIX sh and
-  retain one application process. No virtual environment or shell supervisor.
-- Share the duplicate-instance lock across foreground, direct and Cron starts.
-  Preserve it across exec restarts and release it on signals or crashes so
-  the next scheduled Cron invocation can recover.
-- Add launcher checks for FreeBSD AMD64 selection, paths with spaces, argument
-  forwarding, missing permissions/binaries, startup failures and PID retention.
-  Extend signal/crash lock-recovery tests and add a FreeBSD 14.3 CI job.
-- Package newly built Linux/FreeBSD AMD64 binaries with matching SHA256SUMS;
-  publish CI build artifacts and exclude secrets/state from Docker build input.
-- Preserve all file routes, database settings, session migration and bot features.
-
-## v3.0.0
-
-- Rewrite the bot, HTTP origin, personal library, worker repair and activity
-  tracking in Go with gotd/td for MTProto media reads.
-- Preserve existing MongoDB file codes, collection names, access grants, session
-  hashes, encrypted repair credentials and cumulative counters.
-- Bound active HTTP media connections and ordered look-ahead alongside global
-  Telegram read concurrency. Refresh references on the downloading bot.
-- Supply Linux AMD64 and FreeBSD AMD64 binaries, a native process-lock launcher,
-  deployment documentation and regression tests.
-- Carry the configured filename and MIME type to downloads, including APKs.
-- Add authenticated transfer Stop forwarding to the Cloudflare Worker.
-
+- Simplify automatic classification to AniList and optional OMDb.
 
 ## v2.0.36
 
