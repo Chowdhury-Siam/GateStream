@@ -1,0 +1,509 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="X-Frame-Options" content="deny">
+  <title>{{ fileName }} - GateStream Player</title>
+
+  <!-- Google Fonts & Icons -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.plyr.io/3.7.8/plyr.css" />
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+
+  <script src="https://cdn.plyr.io/3.7.8/plyr.polyfilled.js"></script>
+
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body, html {
+      width: 100%;
+      height: 100%;
+      background-color: #100f0c;
+      color: #e6edf3;
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      overflow-x: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* Top Glassmorphic Navigation Header */
+    header {
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      z-index: 50;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 14px 20px;
+      background: linear-gradient(180deg, rgba(16, 15, 12, 0.9) 0%, rgba(16, 15, 12, 0.4) 70%, transparent 100%);
+      pointer-events: auto;
+      transition: opacity 0.3s ease;
+    }
+
+    .header-left {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      max-width: 100%;
+    }
+
+    .header-logo {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 38px;
+      height: 38px;
+      border-radius: 10px;
+      background: rgba(255, 255, 255, 0.08);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      color: #d6ad60;
+      text-decoration: none;
+      font-size: 16px;
+      transition: all 0.2s ease;
+    }
+
+    .header-logo:hover {
+      background: rgba(214, 173, 96, 0.2);
+      transform: scale(1.05);
+    }
+
+    .header-logo svg { width: 32px; height: 32px; }
+    .brand-name { color: #d6ad60; font-size: 10px; letter-spacing: 1.8px; text-transform: uppercase; }
+
+    .file-details {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      overflow: hidden;
+    }
+
+    .file-title {
+      font-size: 15px;
+      font-weight: 600;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      color: #ffffff;
+      text-shadow: 0 1px 3px rgba(0,0,0,0.8);
+    }
+
+    .file-meta-pills {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+
+    .badge {
+      font-size: 11px;
+      font-weight: 500;
+      padding: 2px 7px;
+      border-radius: 6px;
+      background: rgba(255, 255, 255, 0.12);
+      backdrop-filter: blur(8px);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      color: #cbd5e1;
+    }
+
+    .badge-primary {
+      background: rgba(214, 173, 96, 0.25);
+      border-color: rgba(214, 173, 96, 0.4);
+      color: #f1d89c;
+    }
+
+    /* Player Container */
+    .player-wrapper {
+      flex: 1;
+      width: 100%;
+      height: 100%;
+      position: relative;
+      background: #000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    #stream-media {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+    }
+
+    .plyr {
+      height: 100%;
+      width: 100%;
+      --plyr-color-main: #d6ad60;
+      --plyr-video-control-color-hover: #17130d;
+    }
+
+    .plyr__control--overlaid { color: #17130d; }
+
+    /* Action Bar (External Players & Controls) */
+    .action-bar {
+      background: #191711;
+      border-top: 1px solid rgba(255, 255, 255, 0.08);
+      padding: 12px 20px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 10px;
+      z-index: 40;
+    }
+
+    .action-buttons {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      padding: 8px 14px;
+      font-size: 13px;
+      font-weight: 500;
+      border-radius: 8px;
+      text-decoration: none;
+      cursor: pointer;
+      border: 1px solid transparent;
+      transition: all 0.2s ease;
+      background: rgba(255, 255, 255, 0.07);
+      color: #e2e8f0;
+    }
+
+    .btn:hover {
+      background: rgba(255, 255, 255, 0.14);
+      transform: translateY(-1px);
+    }
+
+    .btn-vlc {
+      background: rgba(255, 136, 0, 0.15);
+      border-color: rgba(255, 136, 0, 0.3);
+      color: #ffaa33;
+    }
+
+    .btn-vlc:hover {
+      background: rgba(255, 136, 0, 0.28);
+    }
+
+    .btn-mx {
+      background: rgba(0, 149, 255, 0.15);
+      border-color: rgba(0, 149, 255, 0.3);
+      color: #38bdf8;
+    }
+
+    .btn-mx:hover {
+      background: rgba(0, 149, 255, 0.28);
+    }
+
+    .btn-download {
+      background: rgba(34, 197, 94, 0.15);
+      border-color: rgba(34, 197, 94, 0.3);
+      color: #4ade80;
+    }
+
+    .btn-download:hover {
+      background: rgba(34, 197, 94, 0.28);
+    }
+
+    /* Resume Banner */
+    .resume-banner {
+      position: absolute;
+      bottom: 80px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(15, 23, 42, 0.95);
+      border: 1px solid rgba(214, 173, 96, 0.4);
+      backdrop-filter: blur(12px);
+      padding: 10px 18px;
+      border-radius: 12px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.7);
+      z-index: 60;
+      animation: fadeIn 0.3s ease;
+    }
+
+    .resume-text {
+      font-size: 13px;
+      color: #f1f5f9;
+    }
+
+    .btn-resume {
+      background: #d6ad60;
+      color: #17130d;
+      padding: 5px 12px;
+      border-radius: 6px;
+      font-size: 12px;
+      font-weight: 600;
+      border: none;
+      cursor: pointer;
+    }
+
+    .btn-resume:hover {
+      background: #bd8f3c;
+    }
+
+    .btn-close-resume {
+      background: none;
+      border: none;
+      color: #94a3b8;
+      cursor: pointer;
+      font-size: 14px;
+    }
+
+    .btn-close-resume:hover {
+      color: #ffffff;
+    }
+
+    /* Toast Notification */
+    #toast {
+      position: fixed;
+      bottom: 30px;
+      right: 30px;
+      background: #1e293b;
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      padding: 10px 18px;
+      border-radius: 8px;
+      font-size: 13px;
+      color: #f8fafc;
+      box-shadow: 0 10px 20px rgba(0,0,0,0.5);
+      opacity: 0;
+      transform: translateY(10px);
+      transition: all 0.3s ease;
+      pointer-events: none;
+      z-index: 100;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    #toast.show {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translate(-50%, 10px); }
+      to { opacity: 1; transform: translate(-50%, 0); }
+    }
+
+    @media (max-width: 640px) {
+      .action-bar {
+        justify-content: center;
+      }
+      .action-buttons {
+        width: 100%;
+        justify-content: space-around;
+      }
+      .btn {
+        padding: 7px 10px;
+        font-size: 12px;
+      }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Top Glass Header -->
+  <header>
+    <div class="header-left">
+      {% if botUsername and botUsername.lower() != 'botfather' %}
+      <a href="https://t.me/{{ botUsername }}" target="_blank" rel="noopener noreferrer" class="header-logo" title="Open GateStream bot">
+        {% include 'brand.svg' %}
+      </a>
+      {% else %}
+      <div class="header-logo">{% include 'brand.svg' %}</div>
+      {% endif %}
+      <div class="file-details">
+        <span class="brand-name">GateStream / Player</span>
+        <span class="file-title">{{ fileName }}</span>
+        <div class="file-meta-pills">
+          {% if fileSize %}
+          <span class="badge badge-primary"><i class="fas fa-database"></i> {{ fileSize }}</span>
+          {% endif %}
+          {% if duration and duration != 'N/A' %}
+          <span class="badge"><i class="fas fa-clock"></i> {{ duration }}</span>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Video Player -->
+  <div class="player-wrapper">
+    <video id="stream-media" playsinline controls preload="metadata" src="{{ mediaLink }}">
+      Your browser does not support HTML5 video streaming.
+    </video>
+
+    <!-- Smart Resume Floating Banner -->
+    <div id="resume-banner" class="resume-banner" style="display: none;">
+      <i class="fas fa-history" style="color: #d6ad60;"></i>
+      <span id="resume-text" class="resume-text">Resume playback from 00:00?</span>
+      <button id="btn-do-resume" class="btn-resume">Resume</button>
+      <button id="btn-dismiss-resume" class="btn-close-resume"><i class="fas fa-times"></i></button>
+    </div>
+  </div>
+
+  <!-- Action Bar (External App & Utility Links) -->
+  <div class="action-bar">
+    <div class="action-buttons">
+      <!-- VLC Direct Intent Link -->
+      <a id="vlc-link" href="#" class="btn btn-vlc" title="Stream in VLC Media Player">
+        <i class="fas fa-play-circle"></i> VLC Player
+      </a>
+
+      <!-- MX Player Intent Link (Android) -->
+      <a id="mx-link" href="#" class="btn btn-mx" title="Stream in MX Player">
+        <i class="fas fa-play"></i> MX Player
+      </a>
+
+      <!-- Copy Stream URL -->
+      <button id="copy-btn" class="btn" title="Copy streaming URL to clipboard">
+        <i class="fas fa-copy"></i> Copy Link
+      </button>
+
+      <!-- Direct Download -->
+      <a href="{{ downloadLink | default(mediaLink) }}" class="btn btn-download" download title="Download full media file">
+        <i class="fas fa-download"></i> Download
+      </a>
+    </div>
+  </div>
+
+  <div id="toast"><i class="fas fa-check-circle" style="color: #4ade80;"></i> <span id="toast-msg">Copied!</span></div>
+
+  <script>
+    const mediaLink = "{{ mediaLink }}";
+    const fileCode = "{{ fileCode }}";
+
+    // Setup Plyr Player with custom controls & seeking
+    const player = new Plyr('#stream-media', {
+      controls: [
+        'play-large',
+        'rewind',
+        'play',
+        'fast-forward',
+        'progress',
+        'current-time',
+        'duration',
+        'mute',
+        'volume',
+        'settings',
+        'pip',
+        'fullscreen'
+      ],
+      settings: ['speed', 'quality', 'loop'],
+      speed: { selected: 1, options: [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2] },
+      seekTime: 10,
+      keyboard: { focused: true, global: true }
+    });
+
+    // Configure External Player URLs
+    if (mediaLink) {
+      const cleanUrl = mediaLink.replace(/^https?:\/\//, '');
+      
+      // VLC: On Android uses Intent, on Desktop/iOS uses vlc://
+      const isAndroid = /Android/i.test(navigator.userAgent);
+      if (isAndroid) {
+        document.getElementById('vlc-link').href = `intent:${mediaLink}#Intent;package=org.videolan.vlc;type=video/*;end`;
+        document.getElementById('mx-link').href = `intent:${mediaLink}#Intent;package=com.mxtech.videoplayer.ad;type=video/*;end`;
+      } else {
+        document.getElementById('vlc-link').href = `vlc://${cleanUrl}`;
+        document.getElementById('mx-link').href = mediaLink; // Fallback to direct stream
+      }
+    }
+
+    // Smart Playback Resume Feature
+    // Keep the legacy storage key so existing playback positions survive the rebrand.
+    const resumeKey = 'omni_pos_' + fileCode;
+    const resumeBanner = document.getElementById('resume-banner');
+    const resumeText = document.getElementById('resume-text');
+    const btnDoResume = document.getElementById('btn-do-resume');
+    const btnDismissResume = document.getElementById('btn-dismiss-resume');
+
+    function formatTime(seconds) {
+      const mins = Math.floor(seconds / 60);
+      const secs = Math.floor(seconds % 60);
+      return `${mins}:${secs < 10 ? '0' : ''}${secs}`;
+    }
+
+    player.on('loadedmetadata', () => {
+      try {
+        const savedTime = parseFloat(localStorage.getItem(resumeKey) || '0');
+        if (savedTime > 15 && savedTime < (player.duration - 20)) {
+          resumeText.textContent = `Resume playback from ${formatTime(savedTime)}?`;
+          resumeBanner.style.display = 'flex';
+
+          btnDoResume.onclick = () => {
+            player.currentTime = savedTime;
+            player.play();
+            resumeBanner.style.display = 'none';
+          };
+
+          btnDismissResume.onclick = () => {
+            resumeBanner.style.display = 'none';
+          };
+        }
+      } catch (e) {
+        console.warn("Storage access restricted:", e);
+      }
+    });
+
+    // Save playback position every 5s
+    let lastSaved = 0;
+    player.on('timeupdate', () => {
+      const now = Date.now();
+      if (now - lastSaved > 5000 && player.currentTime > 5) {
+        lastSaved = now;
+        try {
+          localStorage.setItem(resumeKey, player.currentTime.toString());
+        } catch (e) {}
+      }
+    });
+
+    player.on('ended', () => {
+      try {
+        localStorage.removeItem(resumeKey);
+      } catch (e) {}
+    });
+
+    // Copy Link Notification Toast
+    const copyBtn = document.getElementById('copy-btn');
+    const toast = document.getElementById('toast');
+    const toastMsg = document.getElementById('toast-msg');
+
+    function showToast(msg) {
+      toastMsg.textContent = msg;
+      toast.classList.add('show');
+      setTimeout(() => toast.classList.remove('show'), 2500);
+    }
+
+    copyBtn.onclick = () => {
+      navigator.clipboard.writeText(mediaLink).then(() => {
+        showToast('Stream Link Copied!');
+      }).catch(() => {
+        const temp = document.createElement('input');
+        temp.value = mediaLink;
+        document.body.appendChild(temp);
+        temp.select();
+        document.execCommand('copy');
+        document.body.removeChild(temp);
+        showToast('Stream Link Copied!');
+      });
+    };
+  </script>
+</body>
+</html>
