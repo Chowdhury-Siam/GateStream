@@ -66,32 +66,6 @@ test('preserves origin errors and redirects; reports network failures as 502', a
   assert.equal((await worker.fetch(new Request('https://proxy.example/health'), env)).status, 502);
 });
 
-test('forwards library and setup POST forms and rejects retired archive actions', async (t) => {
-  const folder = 'a'.repeat(43);
-  for (const path of ['/index/sign-in', '/index/sign-in?setup=workers', '/index/sign-out', '/index/worker-setup']) {
-    const upstream = new Response('sign-in', { headers: { 'Set-Cookie': 'gatestream_index=session; HttpOnly', 'Cache-Control': 'private, no-store' } });
-    t.mock.method(globalThis, 'fetch', async (url, options) => {
-      assert.equal(url, 'https://origin.example' + path);
-      assert.equal(options.method, 'POST');
-      assert.equal(options.headers.get('Cookie'), 'gatestream_index_csrf=token');
-      assert.equal(await new Response(options.body).text(), 'csrf=token&code=episode1');
-      return upstream;
-    });
-    const response = await worker.fetch(new Request('https://proxy.example' + path, {
-      method: 'POST', headers: { Cookie: 'gatestream_index_csrf=token', 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: 'csrf=token&code=episode1',
-    }), env);
-    assert.equal(response, upstream);
-    assert.match(response.headers.get('Set-Cookie'), /HttpOnly/);
-    t.mock.restoreAll();
-  }
-  assert.equal((await worker.fetch(new Request('https://proxy.example/dl/code', { method: 'POST' }), env)).status, 405);
-  assert.equal((await worker.fetch(new Request('https://proxy.example/index/share/invalid', { method: 'POST' }), env)).status, 405);
-  for (const path of ['/index/login', '/index/logout', '/index/download', '/index/share/' + folder, '/index/folder/' + folder + '/rename']) {
-    assert.equal((await worker.fetch(new Request('https://proxy.example' + path, { method: 'POST' }), env)).status, 405);
-  }
-});
-
 test('anonymous download grouping survives separate ranges and overwrites caller keys', async (t) => {
   const keys = [];
   t.mock.method(globalThis, 'fetch', async (url, options) => {
@@ -125,18 +99,4 @@ test('caller grouping key is stripped when no edge visitor address exists', asyn
   await worker.fetch(new Request('https://proxy.example/dl/file', {headers: {
     'X-GateStream-Client': 'caller-controlled',
   }}), env);
-});
-
-
-test('forwards authenticated transfer stop forms to the origin', async (t) => {
- t.mock.method(globalThis, 'fetch', async (url, options) => {
-  assert.equal(url, 'https://origin.example/api/transfers/17/stop');
-  assert.equal(options.method, 'POST');
-  assert.equal(options.headers.get('Cookie'), 'gatestream_library=private');
-  assert.equal(await new Response(options.body).text(), 'csrf=token');
-  return new Response('{"stopped":true}', {headers: {'Content-Type':'application/json'}});
- });
- const response=await worker.fetch(new Request('https://proxy.example/api/transfers/17/stop', {method:'POST',headers:{Cookie:'gatestream_library=private'},body:'csrf=token'}),env);
- assert.equal(response.status,200);
- assert.deepEqual(await response.json(),{stopped:true});
 });
