@@ -1,5 +1,15 @@
 # Changelog
 
+## v2.0.40
+
+- Redesign `/stats` with live Telegram panels for transfers, workers, and host storage.
+- Let the owner move the single dashboard between private chats, groups, and forum topics. The bot deletes the previous dashboard before posting the replacement.
+- Resume the saved dashboard after an origin restart.
+
+## v2.0.39
+
+- Show the file-ready title, filename, and size in separate Telegram quotes. The download URL appears in a copyable code block for uploads and `/link` retries.
+
 ## v2.0.38
 
 - Simplify file-to-link workflows and separate the welcome menu from command help.
