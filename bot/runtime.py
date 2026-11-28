@@ -63,6 +63,7 @@ async def main():
     from bot.database import db
     from bot.server import server
     from bot.modules.activity_store import activity_store
+    from bot.modules.live_stats import live_stats
     from bot.modules.memory import monitor_memory
 
     loop = asyncio.get_running_loop()
@@ -102,6 +103,7 @@ async def main():
         lifecycle.spawn(monitor_memory(stop))
         lifecycle.spawn(keep_alive_heartbeat())
         lifecycle.spawn(clients.notify_restart())
+        lifecycle.spawn(live_stats.restore(clients.TelegramBot))
         done, _ = await asyncio.wait((http_task, stop_task), return_when=asyncio.FIRST_COMPLETED)
         if http_task in done and not stop.is_set():
             await http_task
