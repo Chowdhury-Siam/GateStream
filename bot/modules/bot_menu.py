@@ -16,7 +16,7 @@ logger = logging.getLogger('bot')
 async def register_commands(client):
     common = [BotCommand('start', 'Open GateStream'), BotCommand('help', 'Show commands and instructions')]
     owner = [*common, BotCommand('auth', 'Authorize a user or group'),
-             BotCommand('unauth', 'Remove authorization'), BotCommand('stats', 'View server statistics'),
+             BotCommand('unauth', 'Remove authorization'), BotCommand('stats', 'Open live server stats'),
              BotCommand('workers', 'Test worker posting in the log')]
     for commands, scope in ((common, BotCommandScopeDefault()), (common, BotCommandScopeAllPrivateChats()),
                             (owner, BotCommandScopeChat(Telegram.OWNER_ID))):
