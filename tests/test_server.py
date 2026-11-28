@@ -3,6 +3,8 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, patch
 
+from hydrogram import raw
+
 
 with patch.dict(os.environ, {
     'TELEGRAM_API_ID': '12345',
@@ -135,7 +137,7 @@ class TelegramReplyTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('TELEGRAM_CHANNEL_ID', parsed['message'])
         self.assertNotIn('/link', parsed['message'])
 
-    async def test_direct_upload_captions_show_duration_only_when_known(self):
+    async def test_direct_upload_quotes_details_and_puts_the_url_in_a_code_block(self):
         for video in (True, False):
             with self.subTest(video=video):
                 status = SimpleNamespace(edit_text=AsyncMock())
@@ -146,18 +148,42 @@ class TelegramReplyTests(unittest.IsolatedAsyncioTestCase):
                     document=None if video else SimpleNamespace(mime_type='application/pdf'),
                     video=video,
                 )
-                properties = ('Movie.mp4' if video else 'Book.pdf', 1024, 'video/mp4' if video else 'application/pdf', 65 if video else 0, '01:05' if video else 'N/A')
+                file_name = 'Movie 🎬 <Trailer> & Credits.mp4' if video else 'Book.pdf'
+                properties = (
+                    file_name, 1024, 'video/mp4' if video else 'application/pdf',
+                    65 if video else 0, '01:05' if video else 'N/A',
+                )
                 with patch.object(self.files.Telegram, 'CHANNEL_ID', -1001234567890):
                     with patch.object(self.files, 'get_file_properties', return_value=properties):
                         with patch.object(self.files, 'save_file', AsyncMock(return_value={'code': 'test-code'})):
                             await self.files.handle_user_file.__wrapped__(None, message)
-                caption = status.edit_text.call_args.kwargs['text']
+                reply = status.edit_text.await_args.kwargs
+                parsed = await clients.TelegramBot.parser.parse(reply['text'], mode=reply['parse_mode'])
+                title = 'File ready'
+                details = '1.0 KB · Duration 01:05' if video else '1.0 KB'
+                download_url = 'https://user-app.hf.space/dl/test-code'
+                self.assertEqual(parsed['message'], '\n'.join((title, file_name, details, download_url)))
+
+                data = parsed['message'].encode('utf-16-le')
+                spans = [
+                    (type(entity), data[entity.offset * 2:(entity.offset + entity.length) * 2].decode('utf-16-le'))
+                    for entity in parsed['entities']
+                ]
+                self.assertCountEqual(spans, [
+                    (raw.types.MessageEntityBold, title),
+                    (raw.types.MessageEntityBlockquote, title),
+                    (raw.types.MessageEntityBlockquote, file_name),
+                    (raw.types.MessageEntityBlockquote, details),
+                    (raw.types.MessageEntityPre, download_url),
+                ])
+
+                links, revoke = reply['reply_markup'].inline_keyboard
+                expected_links = [('Download', download_url)]
                 if video:
-                    self.assertIn('Duration 01:05', caption)
-                else:
-                    self.assertNotIn('Duration', caption)
-                    self.assertNotIn('N/A', caption)
-                self.assertIn('https://user-app.hf.space/dl/test-code', caption)
+                    expected_links.append(('Stream', 'https://user-app.hf.space/stream/test-code'))
+                self.assertEqual([(button.text, button.url) for button in links], expected_links)
+                self.assertEqual(revoke[0].text, 'Revoke link')
+                self.assertEqual(revoke[0].callback_data, 'rm_test-code')
 
     async def test_private_credentials_are_not_indexed_as_media(self):
         message = SimpleNamespace(document=SimpleNamespace(file_name='token.json'),reply=AsyncMock(),copy=AsyncMock())
