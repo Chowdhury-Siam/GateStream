@@ -24,11 +24,7 @@ export default {
       });
     }
     const incoming = new URL(request.url);
-    const formPost = request.method === 'POST' && (
-      ['/index/sign-in', '/index/sign-out', '/index/worker-setup'].includes(incoming.pathname) ||
-      /^\/api\/transfers\/[0-9]+\/stop$/.test(incoming.pathname)
-    );
-    if (!['GET', 'HEAD'].includes(request.method) && !formPost) {
+    if (!['GET', 'HEAD'].includes(request.method)) {
       return new Response('Method not allowed', {
         status: 405, headers: { Allow: 'GET, HEAD, OPTIONS' },
       });
@@ -56,7 +52,6 @@ export default {
       return await fetch(origin.toString(), {
         method: request.method,
         headers,
-        ...(formPost ? { body: request.body } : {}),
         redirect: 'manual',
       });
     } catch {
