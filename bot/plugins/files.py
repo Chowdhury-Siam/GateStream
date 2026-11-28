@@ -96,7 +96,12 @@ async def save_upload(msg, *, reply_to=None):
         details = human_size
         if duration:
             details += f' · Duration {escape(duration_formatted)}'
-        caption = f'<b>File ready</b>\n{escape(file_name)}\n{details}\n\n<code>{escape(dl_link)}</code>'
+        caption = (
+            '<blockquote><b>File ready</b></blockquote>\n'
+            f'<blockquote>{escape(file_name)}</blockquote>\n'
+            f'<blockquote>{details}</blockquote>\n'
+            f'<pre>{escape(dl_link)}</pre>'
+        )
         kwargs = dict(parse_mode=enums.ParseMode.HTML, reply_markup=InlineKeyboardMarkup(buttons),
                       disable_web_page_preview=True)
         if status_msg is not None:
